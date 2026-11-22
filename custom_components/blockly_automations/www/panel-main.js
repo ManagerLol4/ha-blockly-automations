@@ -128,11 +128,43 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
   async _pick(opts) {
     if (!(await this._ensureComponents())) return undefined;
     if (opts.mode === "entity" || opts.mode === "target") {
-      if (!customElements.get("ha-automation-add-from-target")) return undefined;
+      if (!(await this._ensureTargetTree())) return undefined;
       return this._pickEntity(opts);
     }
     if (!customElements.get("ha-selector")) return undefined;
     return this._pickSelector(opts);
+  }
+
+  // Der HA-Raumbaum (ha-automation-add-from-target) wird von HA erst mit dem
+  // Dialog „… hinzufügen“ geladen. Einmal unsichtbar öffnen und sofort schließen.
+  async _ensureTargetTree() {
+    const TAG = "ha-automation-add-from-target";
+    if (customElements.get(TAG)) return true;
+    if (!this._treeLoading) {
+      this._treeLoading = (async () => {
+        const el = document.createElement("ha-automation-trigger");
+        el.hass = this._hass;
+        el.triggers = [];
+        el.style.display = "none";
+        el.addEventListener("value-changed", (e) => e.stopPropagation());
+        this.appendChild(el);
+        await new Promise((r) => setTimeout(r, 50));
+        try { el._addTriggerDialog(); } catch (e) { el.remove(); return false; }
+        const ha = document.querySelector("home-assistant");
+        const t0 = Date.now();
+        let d = null;
+        while (Date.now() - t0 < 8000) {
+          d = ha && ha.shadowRoot && ha.shadowRoot.querySelector("add-automation-element-dialog");
+          if (d) d.style.visibility = "hidden";
+          if (d && customElements.get(TAG)) break;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        try { if (d && d.closeDialog) d.closeDialog(); } catch (e) { /* egal */ }
+        setTimeout(() => el.remove(), 500);
+        return !!customElements.get(TAG);
+      })();
+    }
+    return this._treeLoading;
   }
 
   _makeDialog(title, wide) {
