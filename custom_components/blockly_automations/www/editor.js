@@ -69,6 +69,18 @@
     };
     return named(def.fields);
   };
+  HAB.hooks.serviceName = (svc) => {
+    if (!S.hass || typeof svc !== "string" || !svc.includes(".")) return "";
+    const [d, s] = svc.split(".");
+    const n = loc(`component.${d}.services.${s}.name`);
+    return n ? "· " + n : "";
+  };
+  HAB.hooks.serviceTarget = (svc) => {
+    if (!S.hass || typeof svc !== "string" || !svc.includes(".")) return null;
+    const [d, s] = svc.split(".");
+    const def = S.hass.services[d] && S.hass.services[d][s];
+    return def ? !!def.target : null;
+  };
 
   function status(text, cls = "") {
     const el = $("status");
@@ -342,6 +354,12 @@
       if (first) {
         initWorkspace();
         fillPicker(true);
+        // Deutsche Namen der Dienste und ihrer Felder nachladen, dann Werkzeugkasten auffrischen.
+        try {
+          Promise.resolve(hass.loadBackendTranslation && hass.loadBackendTranslation("services"))
+            .then(() => setTimeout(() => S.ws.updateToolbox(HAB.buildToolbox()), 300))
+            .catch(() => {});
+        } catch (e) { /* optional */ }
         return;
       }
       // Neue/umbenannte Automationen in der Auswahl nachziehen.

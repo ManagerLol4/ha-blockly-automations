@@ -33,16 +33,25 @@ bearbeiten – Auslöser, Bedingungen und Aktionen als Puzzleteile.
 
 ## Bedienung
 
-1. Oben eine Automation wählen – sie erscheint als Blöcke.
-2. Werte direkt in den Blöcken ändern (Uhrzeit, Entität, Zustand …) oder Blöcke aus dem
-   Werkzeugkasten links ziehen.
-3. **Speichern** schreibt die Automation nach HA zurück, liest sie erneut und vergleicht.
+1. Oben eine Automation wählen – sie erscheint als Blöcke. Oder **＋ Neu** für eine neue Automation.
+2. Blöcke aus dem Werkzeugkasten links (Auslöser, Bedingungen, Aktionen, Ablauf) in die Lücken
+   ziehen, Werte direkt im Block eintragen.
+   - Entitäts-, Zustands-, Dienst- und Uhrzeitfelder bieten beim Tippen Vorschläge aus deinem HA.
+   - Dienst-Blöcke zeigen automatisch die Felder des gewählten Dienstes (z. B. Helligkeit bei
+     `light.turn_on`). Leere Felder werden nicht gespeichert.
+   - Rechtsklick → *Block deaktivieren* entspricht `enabled: false` in HA.
+3. **Speichern** schreibt die Automation nach HA (neue Automationen werden dort angelegt),
+   liest sie erneut und vergleicht.
 
-Aktuell mit eigenen Feldern: Auslöser *Zeit, Zustand, Zahlenwert, Sonne, Zeitmuster, Template,
-Home Assistant, Ereignis*; Bedingungen *Zustand, Zahlenwert, Zeit, Sonne, Auslöser-ID, Template,
-Zone, UND/ODER/NICHT*; Aktionen *Dienstaufruf, Verzögerung, Warten, Wenn/Dann/Sonst, Auswahl
-(choose), Wiederholen, Parallel, Folge, Ereignis, Szene, Variablen, Stopp*. Geräte-Auslöser und
--Aktionen werden angezeigt und unverändert erhalten.
+| Bereich | Blöcke mit eigenen Feldern |
+|---|---|
+| Auslöser | Zustand, Zahlenwert, Uhrzeit, Zeitmuster, Sonne, Zone, Template, Home Assistant, Ereignis, Kalender, Sprachbefehl, MQTT, Webhook, NFC-Tag, Benachrichtigung |
+| Bedingungen | Zustand, Zahlenwert, Uhrzeit (mit Wochentagen), Sonne, Zone, Auslöser-ID, Template, UND/ODER/NICHT |
+| Aktionen | Dienst aufrufen (Felder aus dem HA-Schema), Szene, Ereignis, Variablen |
+| Ablauf | Wenn/Dann/Sonst, Auswahl mit Optionen, Warten (Zeit/Template/Auslöser), Wiederholen (Anzahl/solange/bis), Parallel, Folge, Stopp |
+
+Geräte-Auslöser, -Bedingungen und -Aktionen werden angezeigt und unverändert erhalten; alles
+Übrige bearbeitest du über das JSON-Feld rechts.
 
 ## Entwicklung
 

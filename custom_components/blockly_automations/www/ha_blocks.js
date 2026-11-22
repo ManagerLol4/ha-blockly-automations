@@ -68,10 +68,12 @@
   // ---------- Anbindung an HA (setzt der Editor) ----------
   const hooks = {
     entityName: () => "",
+    serviceName: () => "",
     entities: () => [],          // (domains[]) -> [[entity_id, name], ...]
     states: () => [],            // (entity_id) -> ["on", "off", ...]
     services: () => [],          // () -> [["light.turn_on", "Licht einschalten"], ...]
     serviceFields: () => null,   // ("light.turn_on") -> {key: {selector, name}}
+    serviceTarget: () => null,   // ("light.turn_on") -> true/false (hat ein Ziel), null = unbekannt
   };
 
   // ---------- Farben ----------
@@ -308,7 +310,10 @@
       const fields = [F(key, "Dienst", { type: "service" })];
       const domains = anyDomain || !dom ? undefined : [dom];
       if (a.entity_id !== undefined) fields.push(F("entity_id", "Entität", { type: "entity", domains }));
-      else fields.push(F("target.entity_id", "Entität", { type: "entity", domains, show: !a.target && dom === "notify" ? "present" : "always" }));
+      else {
+        const hasTarget = typeof svc === "string" ? hooks.serviceTarget(svc) : null;
+        fields.push(F("target.entity_id", "Entität", { type: "entity", domains, show: hasTarget === false ? "present" : "always" }));
+      }
       fields.push(P("target.area_id", "Bereich", { type: "list" }));
       fields.push(P("target.device_id", "Gerät", { type: "list" }));
       if (typeof svc === "string") fields.push(...serviceDataFields(a, svc));
@@ -573,7 +578,12 @@
             inp.appendField(lbl, "N" + i);
             fld.setValidator((nv) => { lbl.setValue(hooks.entityName(nv)); return nv; });
           }
-          if (f.type === "service") this.serviceField_ = name;
+          if (f.type === "service") {
+            this.serviceField_ = name;
+            const lbl = new Blockly.FieldLabel(hooks.serviceName(str), "ha-entity-name");
+            inp.appendField(lbl, "N" + i);
+            fld.setValidator((nv) => { lbl.setValue(hooks.serviceName(nv)); return nv; });
+          }
         });
         this.listMap_ = [];
         spec.lists.forEach((l, i) => {
