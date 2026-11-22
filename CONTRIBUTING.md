@@ -7,13 +7,17 @@ Wir bauen das zu zweit (oder mehr) – so bleibt es übersichtlich:
    Beispiel-Automation in `tests/fixtures/` (ohne echte Geräte-IDs/Namen), die den
    Rundlauf HA → Blöcke → HA unverändert übersteht.
 3. **Pull Request** gegen `main` öffnen, der andere schaut kurz drüber und merged.
+4. **Release:** `node scripts/bump.js x.y.z`, committen, Tag `vx.y.z` pushen und auf GitHub ein
+   Release anlegen. Installationen mit der Update-Automation holen es sich dann selbst.
 
 ## Wo was liegt
 
 | Datei | Inhalt |
 |---|---|
 | `custom_components/blockly_automations/__init__.py` | Registriert Panel + statische Dateien |
-| `www/panel.js` | Seitenleisten-Element, bettet den Editor als iframe ein und öffnet den nativen HA-Eigenschaften-Dialog (`ha-automation-*-editor` in `ha-dialog`; hängt im Panel-Element, damit HA-Kontextdaten ankommen) |
+| `www/panel.js` | Nur ein Lader: liest `version.json` und lädt `panel-main.js` mit Versionsnummer (Updates ohne Neustart) |
+| `www/panel-main.js` | Seitenleisten-Element, bettet den Editor als iframe ein; öffnet die originalen HA-Dialoge: „… hinzufügen“ (über eine unsichtbare `ha-automation-trigger/condition/action`-Liste) und Eigenschaften (`ha-automation-*-editor` in `ha-dialog`). Beide hängen im Panel-Element, damit HA-Kontextdaten ankommen |
+| `www/version.json` | Aktuelle Version für den Lader – mit `node scripts/bump.js x.y.z` setzen |
 | `www/ha_blocks.js` | **Herzstück:** Blockdefinitionen und Umwandlung HA ↔ Blöcke |
 | `www/editor.js` | Laden/Speichern über die HA-API, JSON-Seitenleiste, Selbsttest |
 | `www/vendor/` | Blockly (Apache-2.0), aktualisieren mit `npm run vendor` |
