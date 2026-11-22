@@ -74,11 +74,24 @@
     services: () => [],          // () -> [["light.turn_on", "Licht einschalten"], ...]
     serviceFields: () => null,   // ("light.turn_on") -> {key: {selector, name}}
     serviceTarget: () => null,   // ("light.turn_on") -> true/false (hat ein Ziel), null = unbekannt
+    openEditor: null,            // (block) -> öffnet den nativen HA-Eigenschaften-Dialog
   };
+
+  // Blöcke ohne verschachtelte Listen können im nativen HA-Dialog bearbeitet werden.
+  const STRUCTURAL = ["choose", "if", "repeat", "parallel", "sequence", "wait_for_trigger"];
+  function nativeEditable(kind, item) {
+    if (!isObj(item)) return false;
+    if (kind === "trigger") return true;
+    if (kind === "condition") return !["and", "or", "not"].includes(item.condition);
+    if (kind === "action") return !STRUCTURAL.some((k) => k in item);
+    return false;
+  }
 
   // ---------- Farben ----------
   const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50 };
   const NONE = "__ha_none__";
+  const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#fff" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64z"/></svg>');
   const UNIT = { days: "Tg", hours: "Std", minutes: "Min", seconds: "Sek", milliseconds: "ms" };
   const WEEKDAYS = [["mon", "Mo"], ["tue", "Di"], ["wed", "Mi"], ["thu", "Do"], ["fri", "Fr"], ["sat", "Sa"], ["sun", "So"]];
   const BOOL_OPTS = [["–", ""], ["ja", "true"], ["nein", "false"]];
@@ -464,6 +477,12 @@
         super(value);
         this.provider_ = provider;
       }
+      // Auswahl-Felder öffnen den nativen HA-Dialog statt einer Textliste.
+      showEditor_(e, quiet) {
+        const b = this.getSourceBlock();
+        if (hooks.openEditor && b && nativeEditable(b.haKind_, b.raw_)) { hooks.openEditor(b); return; }
+        super.showEditor_(e, quiet);
+      }
       widgetCreate_() {
         const input = super.widgetCreate_();
         try {
@@ -529,7 +548,13 @@
         const spec = specFor(this.haKind_, raw);
         this.spec_ = spec;
         this.setColour(spec.colour);
-        this.appendDummyInput("HEAD").appendField(spec.title, "TITLE");
+        const head = this.appendDummyInput("HEAD");
+        head.appendField(spec.title, "TITLE");
+        if (hooks.openEditor && nativeEditable(this.haKind_, raw)) {
+          const block = this;
+          head.appendField(new Blockly.FieldImage(GEAR, 16, 16, "Eigenschaften", () => hooks.openEditor(block)), "GEAR");
+          if (!spec.generic) this.setTooltip("Zahnrad oder Auswahlfeld anklicken: Eigenschaften im HA-Dialog bearbeiten");
+        }
         if (spec.generic) {
           this.appendDummyInput("SUM").appendField(new Blockly.FieldLabel(short(raw, 60), "ha-summary"));
           this.setTooltip("Wird unverändert übernommen. Bearbeiten über das JSON-Feld rechts.");
@@ -744,7 +769,7 @@
     mode: "single",
   });
 
-  const api = { isObj, clone, deepEqual, getPath, specFor, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

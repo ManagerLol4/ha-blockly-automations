@@ -1,16 +1,17 @@
 /* Editor-Logik: lädt Automationen über die HA-API, zeigt sie mit HAB als
  * Blöcke an und speichert sie zurück. Gespeichert wird nur, wenn die
- * Darstellung beim Laden nachweislich verlustfrei war. */
+ * Darstellung beim Laden nachweislich verlustfrei war.
+ * Links: Liste wie im ioBroker-Skripteditor – Ordner = HA-Kategorien. */
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
   const S = {
-    hass: null, ws: null, id: null, original: null, lossless: true, busy: false,
+    hass: null, ws: null, id: null, original: null, lossless: true, busy: false, isNew: false,
+    cats: [], regCat: {}, pendingCat: null, listKey: "", search: "",
   };
+  const NO_CAT = "__none__";
 
-  HAB.defineBlocks(Blockly);
-
-  // ---------- Daten aus HA für Vorschlagslisten ----------
+  // ---------- Daten aus HA für Felder und Vorschläge ----------
   const loc = (key) => { try { return (S.hass.localize && S.hass.localize(key)) || ""; } catch (e) { return ""; } };
   const fname = (st) => (st && st.attributes && st.attributes.friendly_name) || "";
   HAB.hooks.entityName = (eid) => {
@@ -43,8 +44,6 @@
     for (const v of DOMAIN_STATES[dom] || []) out.add(v);
     if (st && Array.isArray(st.attributes.options)) st.attributes.options.forEach((o) => out.add(String(o)));
     if (st && Array.isArray(st.attributes.hvac_modes)) st.attributes.hvac_modes.forEach((o) => out.add(String(o)));
-    if (dom === "person" || dom === "device_tracker")
-      Object.values(S.hass.states).filter((s) => s.entity_id.startsWith("zone.") && s.entity_id !== "zone.home").forEach((z) => out.add(fname(z)));
     out.add("unavailable"); out.add("unknown");
     return [...out].map((s) => [s, loc(`component.${dom}.entity_component._.state.${s}`)]);
   };
@@ -55,11 +54,15 @@
       for (const s of Object.keys(svcs)) out.push([`${d}.${s}`, loc(`component.${d}.services.${s}.name`)]);
     return out.sort((a, b) => a[0].localeCompare(b[0]));
   };
-  HAB.hooks.serviceFields = (svc) => {
+  const svcDef = (svc) => {
     if (!S.hass || typeof svc !== "string" || !svc.includes(".")) return null;
     const [d, s] = svc.split(".");
-    const def = S.hass.services[d] && S.hass.services[d][s];
+    return (S.hass.services[d] && S.hass.services[d][s]) || null;
+  };
+  HAB.hooks.serviceFields = (svc) => {
+    const def = svcDef(svc);
     if (!def) return null;
+    const [d, s] = svc.split(".");
     const named = (fields) => {
       const o = {};
       for (const [k, f] of Object.entries(fields || {})) {
@@ -70,23 +73,37 @@
     return named(def.fields);
   };
   HAB.hooks.serviceName = (svc) => {
-    if (!S.hass || typeof svc !== "string" || !svc.includes(".")) return "";
+    if (!svcDef(svc)) return "";
     const [d, s] = svc.split(".");
     const n = loc(`component.${d}.services.${s}.name`);
     return n ? "· " + n : "";
   };
-  HAB.hooks.serviceTarget = (svc) => {
-    if (!S.hass || typeof svc !== "string" || !svc.includes(".")) return null;
-    const [d, s] = svc.split(".");
-    const def = S.hass.services[d] && S.hass.services[d][s];
-    return def ? !!def.target : null;
+  HAB.hooks.serviceTarget = (svc) => { const def = svcDef(svc); return def ? !!def.target : null; };
+
+  // Eigenschaften im nativen HA-Dialog bearbeiten (stellt das Panel bereit).
+  HAB.hooks.openEditor = async (block) => {
+    if (!block || block.isInFlyout || block.isDisposed()) return;
+    const fn = parent.__haBlocklyEditItem;
+    const item = HAB.blockToItem(block);
+    const title = String(block.spec_ && block.spec_.title || "Eigenschaften").replace(/\s*\(deaktiviert\)$/, "");
+    if (!fn) { block.select(); showSide(); return; }
+    Blockly.hideChaff();
+    const res = await fn(block.haKind_, item, title);
+    if (res === undefined) {
+      status("HA-Dialog nicht verfügbar – Bearbeitung über das JSON-Feld rechts.", "warn");
+      block.select(); showSide(); return;
+    }
+    if (res && !block.isDisposed() && !HAB.deepEqual(res, item)) replaceBlock(block, res);
   };
+
+  HAB.defineBlocks(Blockly);
 
   function status(text, cls = "") {
     const el = $("status");
     el.textContent = text;
     el.className = cls;
   }
+  const errText = (e) => (e && ((e.body && e.body.message) || e.message)) || String(e);
 
   function api(method, id, body) {
     return S.hass.callApi(method, `config/automation/config/${encodeURIComponent(id)}`, body);
@@ -133,6 +150,8 @@
           setTimeout(() => { if (!b.isDisposed()) replaceBlock(b, HAB.blockToItem(b)); }, 0);
         }
       }
+      // Name in der Kopfzeile mitführen.
+      if (e.type === Blockly.Events.BLOCK_CHANGE && !S.busy) updateTitle();
     });
   }
 
@@ -157,12 +176,22 @@
     }
   }
 
+  function showRoot() {
+    const r = rootBlock();
+    if (r) S.ws.scrollBoundsIntoView(r.getBoundingRectangleWithoutChildren());
+  }
+
   // ---------- Status ----------
   function looseCount() {
     return S.ws.getTopBlocks(false).filter((b) => b.type !== "ha_root").length;
   }
+  function updateTitle() {
+    const c = S.ws && currentConfig();
+    $("title").textContent = c ? (c.alias || "(ohne Namen)") : "–";
+  }
   function updateStatus() {
-    if (!S.original) return;
+    if (!S.original) { status(""); return; }
+    updateTitle();
     if (!S.lossless) {
       status("⚠ Diese Automation lässt sich noch nicht verlustfrei darstellen – Speichern gesperrt.", "warn");
       $("save").disabled = true;
@@ -172,7 +201,7 @@
     const loose = looseCount();
     $("save").disabled = false;
     $("save").classList.toggle("primary", changed);
-    let txt = S.isNew ? "✚ Neue Automation – noch nicht in HA gespeichert"
+    let txt = S.isNew ? "✚ Neu – noch nicht in HA gespeichert"
       : changed ? "● Geändert – noch nicht gespeichert" : "Keine Änderungen";
     if (loose) txt += ` · ${loose} lose Blöcke werden nicht gespeichert`;
     status(txt, changed || loose ? "warn" : "");
@@ -182,6 +211,11 @@
   function selectedBlock() {
     const sel = Blockly.getSelected && Blockly.getSelected();
     return sel && sel.type && sel.type.startsWith("ha_") ? sel : null;
+  }
+  function showSide() {
+    $("side").classList.remove("hidden");
+    Blockly.svgResize(S.ws);
+    updateSide();
   }
   function updateSide() {
     if (!S.ws || $("side").classList.contains("hidden")) return;
@@ -230,32 +264,153 @@
     }
   }
 
-  // ---------- Laden / Speichern ----------
+  // ---------- Automationen, Kategorien, Liste ----------
   function automationList() {
     return Object.values(S.hass.states)
       .filter((s) => s.entity_id.startsWith("automation.") && s.attributes.id)
-      .map((s) => ({ id: String(s.attributes.id), name: s.attributes.friendly_name || s.entity_id }))
+      .map((s) => ({ id: String(s.attributes.id), entity_id: s.entity_id, name: s.attributes.friendly_name || s.entity_id, on: s.state === "on" }))
       .sort((a, b) => a.name.localeCompare(b.name, "de"));
   }
-  function fillPicker(initial) {
-    const sel = $("picker");
-    const list = automationList();
-    S.pickerKey = list.map((a) => a.id + a.name).join("|");
+  const entityOf = (id) => { const a = automationList().find((x) => x.id === id); return a ? a.entity_id : null; };
+
+  async function refreshMeta() {
+    try {
+      const cats = await S.hass.callWS({ type: "config/category_registry/list", scope: "automation" });
+      S.cats = cats.sort((a, b) => a.name.localeCompare(b.name, "de"));
+      const ids = automationList().map((a) => a.entity_id);
+      const entries = ids.length ? await S.hass.callWS({ type: "config/entity_registry/get_entries", entity_ids: ids }) : {};
+      S.regCat = {};
+      for (const [eid, e] of Object.entries(entries || {})) S.regCat[eid] = (e && e.categories && e.categories.automation) || null;
+    } catch (e) {
+      console.warn("[Blockly Automations] Kategorien nicht lesbar", e);
+    }
+    S.listKey = "";
+    renderList();
+    renderCategorySelect();
+  }
+
+  function catOfCurrent() {
+    if (S.isNew) return S.pendingCat;
+    const eid = S.id && entityOf(S.id);
+    return eid ? S.regCat[eid] || null : null;
+  }
+
+  function renderCategorySelect() {
+    const sel = $("category");
     sel.innerHTML = "";
-    sel.appendChild(new Option("– Automation wählen –", ""));
-    if (S.isNew) sel.appendChild(new Option("✚ (neu, ungespeichert)", "__new__"));
-    for (const a of list) sel.appendChild(new Option(a.name, a.id));
-    if (initial) {
-      const last = store("haBlockly.last");
-      if (last && list.some((a) => a.id === last)) { sel.value = last; load(last); }
-    } else {
-      sel.value = S.isNew ? "__new__" : S.id || "";
+    sel.appendChild(new Option("– keine –", NO_CAT));
+    for (const c of S.cats) sel.appendChild(new Option(c.name, c.category_id));
+    sel.appendChild(new Option("＋ Neue Kategorie …", "__new__"));
+    sel.value = catOfCurrent() || NO_CAT;
+    sel.disabled = !S.id;
+  }
+
+  async function createCategory() {
+    const name = (prompt("Name der neuen Kategorie:") || "").trim();
+    if (!name) return null;
+    try {
+      const c = await S.hass.callWS({ type: "config/category_registry/create", scope: "automation", name });
+      await refreshMeta();
+      return c.category_id;
+    } catch (e) {
+      alert("Kategorie konnte nicht angelegt werden: " + errText(e));
+      return null;
     }
   }
 
+  async function setCategory(entityId, catId) {
+    try {
+      await S.hass.callWS({ type: "config/entity_registry/update", entity_id: entityId, categories: { automation: catId || null } });
+      S.regCat[entityId] = catId || null;
+      S.listKey = "";
+      renderList();
+      renderCategorySelect();
+      return true;
+    } catch (e) {
+      status("Kategorie nicht gespeichert: " + errText(e), "warn");
+      return false;
+    }
+  }
+
+  function collapsed() { try { return JSON.parse(store("haBlockly.collapsed") || "{}"); } catch (e) { return {}; } }
+
+  function renderList() {
+    if (!S.hass) return;
+    const autos = automationList();
+    const key = JSON.stringify([autos, S.regCat, S.cats, S.search, S.id, S.isNew]);
+    if (key === S.listKey) return;
+    S.listKey = key;
+    const q = S.search.toLowerCase();
+    const shown = autos.filter((a) => !q || a.name.toLowerCase().includes(q) || a.entity_id.includes(q));
+    const groups = [...S.cats.map((c) => ({ id: c.category_id, name: c.name })), { id: NO_CAT, name: "Ohne Kategorie" }];
+    const closed = collapsed();
+    const tree = $("tree");
+    tree.innerHTML = "";
+    for (const g of groups) {
+      const items = shown.filter((a) => (S.regCat[a.entity_id] || NO_CAT) === g.id);
+      if (q && !items.length) continue;
+      const folder = document.createElement("div");
+      folder.className = "folder" + (closed[g.id] && !q ? " closed" : "");
+      const head = document.createElement("div");
+      head.className = "fhead";
+      head.innerHTML = `<span class="arrow">${closed[g.id] && !q ? "▶" : "▼"}</span><span>📁</span><span class="fname"></span><span class="count">${items.length}</span>`;
+      head.querySelector(".fname").textContent = g.name;
+      head.addEventListener("click", () => {
+        const c = collapsed();
+        c[g.id] = !c[g.id];
+        store("haBlockly.collapsed", JSON.stringify(c));
+        S.listKey = "";
+        renderList();
+      });
+      folder.appendChild(head);
+      // Ablegen: Kategorie ändern
+      folder.addEventListener("dragover", (e) => { e.preventDefault(); folder.classList.add("drop"); });
+      folder.addEventListener("dragleave", (e) => { if (!folder.contains(e.relatedTarget)) folder.classList.remove("drop"); });
+      folder.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        folder.classList.remove("drop");
+        const eid = e.dataTransfer.getData("text/plain");
+        if (eid && (S.regCat[eid] || NO_CAT) !== g.id) {
+          if (await setCategory(eid, g.id === NO_CAT ? null : g.id)) status(`In „${g.name}“ verschoben`, "ok");
+        }
+      });
+      const list = document.createElement("div");
+      list.className = "items";
+      for (const a of items) {
+        const it = document.createElement("div");
+        it.className = "item" + (a.id === S.id && !S.isNew ? " sel" : "") + (a.on ? "" : " off");
+        it.draggable = true;
+        it.title = a.entity_id;
+        it.innerHTML = `<span class="name"></span><label class="switch" title="Automation ein/aus"><input type="checkbox"${a.on ? " checked" : ""}><span></span></label>`;
+        it.querySelector(".name").textContent = a.name;
+        it.addEventListener("click", (e) => {
+          if (e.target.closest(".switch")) return;
+          if (a.id !== S.id || S.isNew) { if (confirmDiscard()) load(a.id); }
+          if (window.innerWidth < 800) $("list").classList.add("hidden");
+        });
+        it.querySelector("input").addEventListener("change", (e) => {
+          S.hass.callService("automation", e.target.checked ? "turn_on" : "turn_off", { entity_id: a.entity_id });
+        });
+        it.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", a.entity_id); it.classList.add("dragging"); });
+        it.addEventListener("dragend", () => it.classList.remove("dragging"));
+        list.appendChild(it);
+      }
+      if (S.isNew && (S.pendingCat || NO_CAT) === g.id) {
+        const it = document.createElement("div");
+        it.className = "item sel";
+        it.innerHTML = `<span class="name">✚ (neu, ungespeichert)</span>`;
+        list.appendChild(it);
+      }
+      folder.appendChild(list);
+      tree.appendChild(folder);
+    }
+  }
+
+  // ---------- Laden / Speichern ----------
   function newAutomation() {
     if (!confirmDiscard()) return;
     const cfg = HAB.NEW_AUTOMATION();
+    S.pendingCat = catOfCurrent();
     S.id = String(Date.now());
     S.isNew = true;
     S.lossless = true;
@@ -263,20 +418,22 @@
     S.busy = true;
     loadIntoWorkspace(S.ws, cfg);
     S.busy = false;
-    fillPicker(false);
+    S.listKey = "";
+    renderList();
+    renderCategorySelect();
+    showRoot();
     const r = rootBlock();
-    if (r) { S.ws.scrollBoundsIntoView(r.getBoundingRectangleWithoutChildren()); r.select(); }
+    if (r) r.select();
     updateStatus(); updateSide();
   }
 
   async function load(id) {
-    if (!id || id === "__new__") return;
+    if (!id) return;
     status("Lade …");
     try {
       const cfg = await api("GET", id);
       S.isNew = false;
-      fillPicker(false);
-      $("picker").value = id;
+      S.pendingCat = null;
       S.id = id;
       S.original = cfg;
       S.busy = true;
@@ -285,13 +442,25 @@
       S.lossless = HAB.deepEqual(currentConfig(), cfg);
       if (!S.lossless) console.warn("[Blockly Automations] Rundlauf nicht identisch", { original: cfg, blocks: currentConfig() });
       store("haBlockly.last", id);
-      const r = rootBlock();
-      if (r) S.ws.scrollBoundsIntoView(r.getBoundingRectangleWithoutChildren());
+      showRoot();
+      S.listKey = "";
+      renderList();
+      renderCategorySelect();
       updateStatus(); updateSide();
     } catch (e) {
       S.busy = false;
-      status("Fehler beim Laden: " + (e.body && e.body.message || e.message || e), "warn");
+      status("Fehler beim Laden: " + errText(e), "warn");
     }
+  }
+
+  async function waitForEntity(id, ms = 10000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      const eid = entityOf(id);
+      if (eid) return eid;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return null;
   }
 
   async function save() {
@@ -311,19 +480,24 @@
       if (S.isNew) {
         S.isNew = false;
         store("haBlockly.last", S.id);
-        fillPicker(false);
+        const eid = await waitForEntity(S.id);
+        if (eid && S.pendingCat) await setCategory(eid, S.pendingCat);
+        S.pendingCat = null;
+        await refreshMeta();
       }
       $("save").classList.remove("primary");
+      $("save").disabled = false;
       if (HAB.deepEqual(back, cfg)) status("✓ In Home Assistant gespeichert", "ok");
       else { status("Gespeichert – HA hat die Daten angepasst, neu geladen.", "warn"); await load(S.id); }
     } catch (e) {
-      status("Fehler beim Speichern: " + (e.body && e.body.message || e.message || e), "warn");
+      status("Fehler beim Speichern: " + errText(e), "warn");
       $("save").disabled = false;
     }
   }
 
   function confirmDiscard() {
-    if (S.isNew && S.ws && !HAB.deepEqual(currentConfig(), S.original)) return confirm("Neue, ungespeicherte Automation verwerfen?");
+    if (!S.ws) return true;
+    if (S.isNew && !HAB.deepEqual(currentConfig(), S.original)) return confirm("Neue, ungespeicherte Automation verwerfen?");
     if (!S.original || !S.lossless) return true;
     if (HAB.deepEqual(currentConfig(), S.original)) return true;
     return confirm("Ungespeicherte Änderungen verwerfen?");
@@ -339,7 +513,7 @@
         loadIntoWorkspace(ws, cfg);
         res.push({ name: a.name, ok: HAB.deepEqual(currentConfig(ws), cfg) });
       } catch (e) {
-        res.push({ name: a.name, ok: false, error: String(e && e.message || e) });
+        res.push({ name: a.name, ok: false, error: errText(e) });
       }
     }
     ws.dispose();
@@ -353,8 +527,14 @@
       S.hass = hass;
       if (first) {
         initWorkspace();
-        fillPicker(true);
-        // Deutsche Namen der Dienste und ihrer Felder nachladen, dann Werkzeugkasten auffrischen.
+        renderCategorySelect();
+        S.metaCount = automationList().length;
+        refreshMeta().then(() => {
+          const last = store("haBlockly.last");
+          if (last && automationList().some((a) => a.id === last)) load(last);
+        });
+        // Native HA-Dialoge vorbereiten, deutsche Dienstnamen nachladen.
+        try { parent.__haBlocklyPrepare && parent.__haBlocklyPrepare(); } catch (e) { /* optional */ }
         try {
           Promise.resolve(hass.loadBackendTranslation && hass.loadBackendTranslation("services"))
             .then(() => setTimeout(() => S.ws.updateToolbox(HAB.buildToolbox()), 300))
@@ -362,36 +542,53 @@
         } catch (e) { /* optional */ }
         return;
       }
-      // Neue/umbenannte Automationen in der Auswahl nachziehen.
-      const key = automationList().map((a) => a.id + a.name).join("|");
-      if (key !== S.pickerKey) fillPicker(false);
+      // Neue, umbenannte oder ein-/ausgeschaltete Automationen nachziehen.
+      const count = automationList().length;
+      if (count !== S.metaCount) { S.metaCount = count; refreshMeta(); } else renderList();
     },
     selfTest,
     currentConfig: () => currentConfig(),
     load,
   };
 
-  $("picker").addEventListener("change", (e) => {
-    if (!confirmDiscard()) { e.target.value = S.id || ""; return; }
-    load(e.target.value);
+  $("search").addEventListener("input", (e) => { S.search = e.target.value; renderList(); });
+  $("new").addEventListener("click", newAutomation);
+  $("newCat").addEventListener("click", createCategory);
+  $("category").addEventListener("change", async (e) => {
+    let v = e.target.value;
+    if (v === "__new__") {
+      v = await createCategory();
+      if (!v) { renderCategorySelect(); return; }
+    }
+    const cat = v === NO_CAT ? null : v;
+    if (S.isNew) { S.pendingCat = cat; S.listKey = ""; renderList(); renderCategorySelect(); status("Kategorie wird beim Speichern gesetzt", "ok"); return; }
+    const eid = S.id && entityOf(S.id);
+    if (eid && (await setCategory(eid, cat))) status("✓ Kategorie gespeichert", "ok");
   });
   $("reload").addEventListener("click", () => { if (S.id && !S.isNew && confirmDiscard()) load(S.id); });
-  $("new").addEventListener("click", newAutomation);
-  // Speichern ist nie per disabled blockiert, solange ein Feld-Editor offen ist:
-  // pointerdown schließt ihn vor dem Klick.
+  // pointerdown schließt einen offenen Feld-Editor, bevor ein Knopf greift.
   $("bar").addEventListener("pointerdown", () => { Blockly.hideChaff(); setTimeout(updateStatus, 0); });
   $("save").addEventListener("click", save);
   $("applyJson").addEventListener("click", applyJson);
   $("menu").addEventListener("click", () => parent.__haBlocklyToggleMenu && parent.__haBlocklyToggleMenu());
+  $("toggleList").addEventListener("click", () => {
+    $("list").classList.toggle("hidden");
+    store("haBlockly.list", $("list").classList.contains("hidden") ? "0" : "1");
+    if (S.ws) Blockly.svgResize(S.ws);
+  });
   $("toggleSide").addEventListener("click", () => {
     $("side").classList.toggle("hidden");
     store("haBlockly.side", $("side").classList.contains("hidden") ? "0" : "1");
     Blockly.svgResize(S.ws);
     updateSide();
   });
+  const narrow = window.innerWidth < 800;
   const sidePref = store("haBlockly.side");
-  if (sidePref === "0" || (sidePref === null && window.innerWidth < 800)) $("side").classList.add("hidden");
+  // JSON-Seitenleiste ist ein Expertenwerkzeug: standardmäßig zu.
+  if (sidePref !== "1") $("side").classList.add("hidden");
+  const listPref = store("haBlockly.list");
+  if (listPref === "0" || (listPref === null && narrow)) $("list").classList.add("hidden");
   window.addEventListener("beforeunload", (e) => {
-    if (S.original && S.lossless && !HAB.deepEqual(currentConfig(), S.original)) e.preventDefault();
+    if (S.original && S.lossless && S.ws && !HAB.deepEqual(currentConfig(), S.original)) e.preventDefault();
   });
 })();

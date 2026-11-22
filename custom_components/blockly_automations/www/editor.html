@@ -10,16 +10,29 @@
 </head>
 <body>
   <header id="bar">
-    <button id="menu" class="icon" title="Seitenleiste">&#9776;</button>
-    <select id="picker" title="Automation wählen"><option value="">Lade …</option></select>
-    <button id="new" title="Neue Automation anlegen">＋ Neu</button>
-    <button id="reload" title="Aus HA neu laden">Neu laden</button>
-    <button id="save" class="primary" disabled>Speichern</button>
+    <button id="menu" class="icon" title="HA-Seitenleiste">&#9776;</button>
+    <button id="toggleList" class="icon" title="Automationsliste ein/aus">&#128194;</button>
+    <b id="title" class="title">–</b>
+    <label class="cat" title="Kategorie dieser Automation">
+      <span>Kategorie</span>
+      <select id="category"></select>
+    </label>
     <span id="status"></span>
     <span class="spacer"></span>
+    <button id="reload" title="Aus HA neu laden">Neu laden</button>
+    <button id="save" class="primary">Speichern</button>
     <button id="toggleSide" title="JSON-Seitenleiste ein/aus">JSON</button>
   </header>
   <main>
+    <nav id="list">
+      <div class="listHead">
+        <input id="search" type="search" placeholder="Suchen …" autocomplete="off">
+        <button id="new" class="icon" title="Neue Automation">＋</button>
+        <button id="newCat" class="icon" title="Neue Kategorie (Ordner)">&#128193;</button>
+      </div>
+      <div id="tree"></div>
+      <div class="listFoot">Automationen per Drag &amp; Drop in einen Ordner ziehen, um die Kategorie zu ändern.</div>
+    </nav>
     <div id="ws"></div>
     <aside id="side">
       <div class="sideHead"><b id="sideTitle">Gesamte Automation</b></div>
