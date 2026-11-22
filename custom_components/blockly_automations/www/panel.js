@@ -34,7 +34,8 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
     const cfg = (this._panel && this._panel.config) || {};
     const base = cfg.static_url || "/blockly_automations_static";
     const v = cfg.version || "dev";
-    this.style.cssText = "display:block;height:100%;";
+    // 100% greift im HA-Panel-Container nicht zuverlässig, daher Viewport-Höhe.
+    this.style.cssText = "display:block;height:100vh;height:100dvh;overflow:hidden;";
     const frame = document.createElement("iframe");
     frame.src = `${base}/editor.html?v=${encodeURIComponent(v)}`;
     frame.style.cssText = "border:0;width:100%;height:100%;display:block;";
