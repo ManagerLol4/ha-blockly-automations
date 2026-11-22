@@ -21,7 +21,7 @@ bearbeiten – Auslöser, Bedingungen und Aktionen als Puzzleteile.
 3. „Blockly Automations“ öffnen → **Herunterladen**
 4. Home Assistant neu starten
 5. **Einstellungen → Geräte & Dienste → Integration hinzufügen → „Blockly Automations“**
-6. In der Seitenleiste erscheint **Blockly** (nur für Administratoren)
+6. In der Seitenleiste erscheint **Automationen** mit dem Puzzle-Symbol (nur für Administratoren)
 
 ### Manuell
 

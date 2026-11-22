@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Blockly Automations",
-        "description": "Fügt ein Seitenleisten-Panel „Blockly“ hinzu, das deine Automationen als Blöcke zeigt und sie als normale Home-Assistant-Automationen zurückspeichert."
+        "description": "Fügt ein Seitenleisten-Panel „Automationen“ hinzu, das deine Automationen als Blöcke zeigt und sie als normale Home-Assistant-Automationen zurückspeichert."
       }
     },
     "abort": {
