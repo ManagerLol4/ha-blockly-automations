@@ -154,7 +154,16 @@ ok("schema", () => {
 ok("einfach", () => {
   HAB.hooks.simple = true;
   HAB.hooks.openEditor = () => {};
+  HAB.hooks.pickField = () => {};
+  HAB.hooks.chipText = (c, v) => (v === undefined ? "" : JSON.stringify(v));
   HAB.hooks.describe = () => "Satz";
+  // Chips: Zeitraum zusammengefasst, Profi-Felder nur wenn gesetzt, Ziel als Ganzes.
+  const st = { trigger: "state", entity_id: "binary_sensor.tuer", to: "on", for: { minutes: 1 } };
+  assert.deepStrictEqual(HAB.simpleChips(HAB.specFor("trigger", st), st).map((c) => `${c.path}:${c.type}`),
+    ["entity_id:entity", "from:state", "to:state", "for:duration"]);
+  const act = { action: "light.turn_on", target: { entity_id: "light.a" } };
+  assert.deepStrictEqual(HAB.simpleChips(HAB.specFor("action", act), act).map((c) => `${c.path}:${c.type}`),
+    ["action:service", "target:target"]);
   for (const cat of HAB.buildToolbox().contents) {
     for (const item of cat.contents.filter((x) => x.kind === "block")) {
       const b = toBlocks(item.extraState.raw, item.type.slice(3));
@@ -174,6 +183,7 @@ ok("einfach", () => {
   assert.strictEqual(child(r, "L0").fieldMap_.length, 0);
   HAB.hooks.simple = false;
   HAB.hooks.openEditor = null;
+  HAB.hooks.pickField = null;
   HAB.hooks.describe = () => "";
 });
 

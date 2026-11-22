@@ -135,6 +135,92 @@
     return t ? `${name} · ${t}` : name;
   };
 
+  // ---------- Werte im Baustein (Chips) und ihre Auswahlfenster ----------
+  const WD = { mon: "Mo", tue: "Di", wed: "Mi", thu: "Do", fri: "Fr", sat: "Sa", sun: "So" };
+  const firstEntity = (raw) => (typeof raw.entity_id === "string" ? raw.entity_id : Array.isArray(raw.entity_id) ? raw.entity_id[0] : "");
+  HAB.hooks.chipText = (c, v, raw) => {
+    if (v === undefined || v === "") return "";
+    switch (c.type) {
+      case "entity": return enames(v);
+      case "target": return targetText(v) || "";
+      case "state": return v === null ? "beliebig" : stateText(firstEntity(raw), v);
+      case "duration": return durText(v);
+      case "time": return timeText(v);
+      case "bool": return v === true ? "ja" : v === false ? "nein" : String(v);
+      case "select": { const o = (c.options || []).find((x) => x[1] === String(v)); return o ? o[0] : String(v); }
+      case "weekdays": return arr(v).map((d) => WD[d] || d).join(", ");
+      case "service": { const n = HAB.hooks.serviceName(v); return n ? n.replace(/^·\s*/, "") : String(v); }
+      default: return typeof v === "object" ? JSON.stringify(v) : String(v);
+    }
+  };
+  function selectorFor(c, item) {
+    if (c.sel) return c.sel;
+    switch (c.type) {
+      case "state": { const e = firstEntity(item); return e ? { state: { entity_id: e } } : { text: {} }; }
+      case "time": return { time: {} };
+      case "duration": return { duration: {} };
+      case "number": return { number: { mode: "box", step: "any" } };
+      case "select": return { select: { mode: "list", options: (c.options || []).filter((o) => o[1] !== "").map(([label, value]) => ({ label, value })) } };
+      case "bool": return { boolean: {} };
+      case "weekdays": return { select: { multiple: true, mode: "list", options: Object.entries(WD).map(([value, label]) => ({ value, label })) } };
+      case "template": return { template: {} };
+      case "json": return { object: {} };
+      default: return c.numeric ? { number: { mode: "box", step: "any" } } : { text: {} };
+    }
+  }
+  const pad = (n) => String(n || 0).padStart(2, "0");
+  function toSelectorValue(c, cur) {
+    if (cur === undefined || cur === null) return undefined;
+    if (c.type === "duration" && typeof cur === "string") {
+      const m = /^(-?)(\d+):(\d+):(\d+)$/.exec(cur);
+      return m ? { hours: +m[2], minutes: +m[3], seconds: +m[4] } : cur;
+    }
+    if (c.type === "duration" && typeof cur === "number") return { seconds: cur };
+    if (c.type === "weekdays") return arr(cur);
+    if (Array.isArray(cur) && c.type !== "json") return cur.join(", ");
+    return cur;
+  }
+  function fromSelectorValue(c, v, cur) {
+    if (v === "" || v === undefined || v === null) return "";
+    if (c.type === "duration") {
+      if (!isObj(v)) return v;
+      const clean = Object.fromEntries(Object.entries(v).filter(([, x]) => x !== 0 && x !== "0" && x !== undefined && x !== null));
+      if (!Object.keys(clean).length) return "";
+      if (typeof cur === "string") return `${pad(v.hours)}:${pad(v.minutes)}:${pad(v.seconds)}`;
+      return clean;
+    }
+    if (c.type === "weekdays") return typeof cur === "string" && arr(v).length === 1 ? arr(v)[0] : arr(v);
+    if (typeof v === "string" && (Array.isArray(cur) || (c.type === "list" && v.includes(",")))) return v.split(",").map((s) => s.trim()).filter(Boolean);
+    if (typeof v === "string" && c.numeric && v.trim() !== "" && isFinite(Number(v))) return Number(v);
+    return v;
+  }
+  HAB.hooks.pickField = async (block, c) => {
+    if (!block || block.isDisposed() || block.isInFlyout) return;
+    Blockly.hideChaff();
+    if (c.type === "service") return HAB.hooks.openEditor(block);
+    const fn = parent.__haBlocklyPick;
+    if (!fn) return HAB.hooks.openEditor(block);
+    let item = HAB.blockToItem(block);
+    const cur = c.path ? HAB.getPath(item, c.path) : item;
+    const title = `${String(block.spec_ && block.spec_.title || "").replace(/^\S+\s/, "")} – ${c.label || "Auswahl"}`;
+    let res;
+    if (c.type === "entity") {
+      res = await fn({ mode: "entity", title, value: typeof cur === "string" ? cur : Array.isArray(cur) ? cur[0] || "" : "", domains: c.domains });
+    } else if (c.type === "target") {
+      const e = isObj(cur) ? cur.entity_id : undefined;
+      res = await fn({ mode: "target", title, value: typeof e === "string" ? e : Array.isArray(e) ? e[0] || "" : "", domains: c.domains });
+    } else {
+      res = await fn({ mode: "selector", title, value: toSelectorValue(c, cur), selector: selectorFor(c, item), label: c.label });
+    }
+    if (res === undefined) return HAB.hooks.openEditor(block); // Auswahlfenster nicht verfügbar
+    if (!res || block.isDisposed()) return;
+    const v = fromSelectorValue(c, res.value, cur);
+    if (!c.path) item = v;
+    else if (v === "" || (Array.isArray(v) && !v.length)) { if (cur !== undefined) HAB.delPath(item, c.path); }
+    else HAB.setPath(item, c.path, v);
+    if (!HAB.deepEqual(item, HAB.blockToItem(block))) replaceBlock(block, item);
+  };
+
   HAB.hooks.describe = (kind, x) => {
     if (!S.hass) return "";
     if (kind === "trigger") {

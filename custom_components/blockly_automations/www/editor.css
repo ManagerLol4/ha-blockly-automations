@@ -73,6 +73,8 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 body:not(.expert) .expertOnly { display: none; }
 body.expert #expert { background: var(--accent); color: #fff; border-color: var(--accent); }
 .blocklyText.ha-sentence { fill: #fff !important; font-size: 13px; font-weight: 600; cursor: pointer; }
+.blocklyText.ha-chip { fill: #fff !important; font-weight: 600; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+.blocklyText.ha-chip:hover { text-decoration-style: solid; }
 .blocklyText.ha-add { fill: #fff !important; fill-opacity: .85; font-style: italic; cursor: pointer; }
 .blocklyText.ha-sentence:hover, .blocklyText.ha-add:hover { fill-opacity: 1; text-decoration: underline; }
 #bar { flex-wrap: nowrap; }

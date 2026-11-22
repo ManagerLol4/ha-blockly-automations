@@ -67,6 +67,7 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
       this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
     window.__haBlocklyEditItem = (kind, item, title) => this._editItem(kind, item, title);
     window.__haBlocklyAddItem = (kind) => this._addItem(kind);
+    window.__haBlocklyPick = (opts) => this._pick(opts);
     window.__haBlocklyPrepare = () => this._ensureComponents();
     this._refreshMarketplace();
   }
@@ -118,6 +119,226 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
       })();
     }
     return this._loading;
+  }
+
+  // ---------- Auswahlfenster für einzelne Optionen eines Bausteins ----------
+  // opts: { mode: "entity" | "target" | "selector", title, value, selector, domains, label }
+  // Ergebnis: { value } bei Übernahme (value "" = leeren), null bei Abbruch,
+  // undefined wenn die HA-Bausteine nicht verfügbar sind.
+  async _pick(opts) {
+    if (!(await this._ensureComponents())) return undefined;
+    if (opts.mode === "entity" || opts.mode === "target") {
+      if (!customElements.get("ha-automation-add-from-target")) return undefined;
+      return this._pickEntity(opts);
+    }
+    if (!customElements.get("ha-selector")) return undefined;
+    return this._pickSelector(opts);
+  }
+
+  _makeDialog(title, wide) {
+    const dlg = document.createElement("ha-dialog");
+    dlg.headerTitle = title || "Auswählen";
+    dlg.width = wide ? "large" : "medium";
+    const foot = document.createElement("div");
+    foot.slot = "footer";
+    foot.style.cssText = "display:flex;gap:8px;justify-content:flex-end;width:100%;";
+    dlg.appendChild(foot);
+    return { dlg, foot };
+  }
+
+  _button(text, plain) {
+    const b = document.createElement("ha-button");
+    if (plain) b.setAttribute("appearance", "plain");
+    b.textContent = text;
+    return b;
+  }
+
+  _runDialog(dlg, setup) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        dlg.open = false;
+        setTimeout(() => dlg.remove(), 400);
+        resolve(result);
+      };
+      dlg.addEventListener("closed", (e) => { if (e.target === dlg) finish(null); });
+      dlg.addEventListener("wa-after-hide", (e) => { if (e.target === dlg) finish(null); });
+      setup(finish);
+      this.appendChild(dlg);
+      setTimeout(() => { dlg.open = true; }, 0);
+    });
+  }
+
+  // Auswahl über ein HA-Auswahlfeld (Zustand, Uhrzeit, Dauer, Zahl, Liste …).
+  _pickSelector(opts) {
+    const { dlg, foot } = this._makeDialog(opts.title, false);
+    let value = opts.value;
+    const sel = document.createElement("ha-selector");
+    sel.hass = this._hass;
+    sel.selector = opts.selector;
+    sel.value = value;
+    sel.label = opts.label || "";
+    sel.required = false;
+    sel.style.cssText = "display:block;min-height:80px;";
+    sel.addEventListener("value-changed", (e) => {
+      e.stopPropagation();
+      value = e.detail ? e.detail.value : undefined;
+      sel.value = value;
+    });
+    dlg.insertBefore(sel, foot);
+    const clear = this._button("Leeren", true);
+    clear.style.marginRight = "auto";
+    const cancel = this._button("Abbrechen", true);
+    const ok = this._button("Übernehmen");
+    foot.append(clear, cancel, ok);
+    return this._runDialog(dlg, (finish) => {
+      clear.addEventListener("click", () => finish({ value: "" }));
+      cancel.addEventListener("click", () => finish(null));
+      ok.addEventListener("click", () => finish({ value: value === undefined ? "" : value }));
+    });
+  }
+
+  // Entitäts-/Zielauswahl wie im HA-Dialog „… hinzufügen“:
+  // Suche oben, links Bereiche/Geräte/Entitäten als Baum, rechts die Auswahl.
+  _pickEntity(opts) {
+    const hass = this._hass;
+    const { dlg, foot } = this._makeDialog(opts.title, true);
+    const domains = opts.domains && opts.domains.length ? opts.domains : null;
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <style>
+        .hbp { display:flex; flex-direction:column; gap:12px; height:min(70vh,640px); }
+        .hbp .cols { flex:1; display:flex; gap:16px; min-height:0; }
+        .hbp .left { width:42%; min-width:220px; overflow:auto; border:1px solid var(--divider-color); border-radius:12px; }
+        .hbp .right { flex:1; overflow:auto; background:var(--secondary-background-color, rgba(127,127,127,.06)); border-radius:12px; padding:6px; }
+        .hbp .empty { height:100%; display:flex; align-items:center; justify-content:center; color:var(--secondary-text-color); }
+        .hbp .head { font-size:13px; color:var(--secondary-text-color); padding:8px 10px 4px; }
+        .hbp .row { display:flex; align-items:center; gap:12px; width:100%; padding:10px 12px; border:0; border-radius:10px;
+          background:var(--card-background-color, transparent); color:var(--primary-text-color); text-align:left; cursor:pointer;
+          margin:4px 0; font:inherit; border:1px solid var(--divider-color); }
+        .hbp .row:hover { border-color: var(--primary-color); }
+        .hbp .row.sel { border-color: var(--primary-color); background: rgba(3,169,244,.12); }
+        .hbp .row .t { flex:1; min-width:0; }
+        .hbp .row .n { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .hbp .row .s { font-size:12px; color:var(--secondary-text-color); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .hbp .row.whole { font-weight:600; }
+        .hbp input.q { width:100%; box-sizing:border-box; padding:12px 14px; border-radius:10px; border:1px solid var(--divider-color);
+          background:var(--card-background-color, transparent); color:var(--primary-text-color); font:inherit; outline:none; }
+        .hbp input.q:focus { border-color: var(--primary-color); }
+      </style>
+      <div class="hbp">
+        <input class="q" type="search" placeholder="Durchsuchen">
+        <div class="cols"><div class="left"></div><div class="right"><div class="empty">Wähle links einen Bereich, ein Gerät oder eine Entität</div></div></div>
+      </div>`;
+    dlg.insertBefore(wrap, foot);
+    const left = wrap.querySelector(".left");
+    const right = wrap.querySelector(".right");
+    const q = wrap.querySelector(".q");
+
+    const tree = document.createElement("ha-automation-add-from-target");
+    tree.hass = hass;
+    tree.states = hass.states;
+    tree.narrow = false;
+    tree.timeLocationGroups = [];
+    const cur = typeof opts.value === "string" && opts.value ? { entity_id: opts.value } : undefined;
+    if (cur) tree.value = cur;
+    left.appendChild(tree);
+
+    const ents = hass.entities || {};
+    const devs = hass.devices || {};
+    const areas = hass.areas || {};
+    const areaOf = (eid) => {
+      const e = ents[eid];
+      if (!e) return null;
+      return e.area_id || (e.device_id && devs[e.device_id] && devs[e.device_id].area_id) || null;
+    };
+    const okDomain = (eid) => !domains || domains.includes(eid.split(".")[0]);
+    const nameOf = (eid) => (hass.states[eid] && hass.states[eid].attributes.friendly_name) || eid;
+    const sortByName = (list) => list.sort((a, b) => nameOf(a).localeCompare(nameOf(b), "de"));
+    const entitiesFor = (t) => {
+      const all = Object.keys(hass.states).filter(okDomain);
+      if (t.entity_id) return [t.entity_id];
+      if (t.device_id) return sortByName(all.filter((eid) => ents[eid] && ents[eid].device_id === t.device_id));
+      if (t.area_id) return sortByName(all.filter((eid) => areaOf(eid) === t.area_id));
+      if (t.floor_id) {
+        const ids = Object.values(areas).filter((a) => a.floor_id === t.floor_id).map((a) => a.area_id);
+        return sortByName(all.filter((eid) => ids.includes(areaOf(eid))));
+      }
+      if (t.label_id) return sortByName(all.filter((eid) => ents[eid] && (ents[eid].labels || []).includes(t.label_id)));
+      return [];
+    };
+    const targetName = (t) => {
+      if (t.area_id) return (areas[t.area_id] && areas[t.area_id].name) || t.area_id;
+      if (t.device_id) return (devs[t.device_id] && (devs[t.device_id].name_by_user || devs[t.device_id].name)) || "Gerät";
+      if (t.floor_id) return (hass.floors && hass.floors[t.floor_id] && hass.floors[t.floor_id].name) || t.floor_id;
+      if (t.label_id) return t.label_id;
+      return "";
+    };
+
+    let finishRef = null;
+    const row = (eid) => {
+      const b = document.createElement("button");
+      b.className = "row" + (eid === opts.value ? " sel" : "");
+      const icon = document.createElement("ha-state-icon");
+      icon.hass = hass;
+      icon.stateObj = hass.states[eid];
+      const a = areaOf(eid);
+      b.appendChild(icon);
+      const t = document.createElement("div");
+      t.className = "t";
+      t.innerHTML = '<div class="n"></div><div class="s"></div>';
+      t.querySelector(".n").textContent = nameOf(eid);
+      t.querySelector(".s").textContent = [a && areas[a] ? areas[a].name : "", eid].filter(Boolean).join(" · ");
+      b.appendChild(t);
+      b.addEventListener("click", () => finishRef && finishRef({ value: opts.mode === "target" ? { entity_id: eid } : eid }));
+      return b;
+    };
+    const show = (list, heading, whole) => {
+      right.innerHTML = "";
+      if (whole) {
+        const w = document.createElement("button");
+        w.className = "row whole";
+        w.textContent = `➜ Ganz „${targetName(whole)}“ verwenden`;
+        w.addEventListener("click", () => finishRef && finishRef({ value: whole }));
+        right.appendChild(w);
+      }
+      const h = document.createElement("div");
+      h.className = "head";
+      h.textContent = list.length ? heading : "Hier gibt es nichts Passendes.";
+      right.appendChild(h);
+      for (const eid of list.slice(0, 300)) right.appendChild(row(eid));
+    };
+    tree.addEventListener("value-changed", (e) => {
+      e.stopPropagation();
+      const t = (e.detail && e.detail.value) || {};
+      tree.value = t;
+      const isWhole = opts.mode === "target" && !t.entity_id && Object.values(t).some(Boolean);
+      show(entitiesFor(t), "Entitäten", isWhole ? Object.fromEntries(Object.entries(t).filter(([, v]) => v)) : null);
+    });
+    tree.addEventListener("time-location-group-selected", (e) => e.stopPropagation());
+    q.addEventListener("input", () => {
+      const s = q.value.trim().toLowerCase();
+      if (!s) { right.innerHTML = '<div class="empty">Wähle links einen Bereich, ein Gerät oder eine Entität</div>'; return; }
+      const hits = sortByName(Object.keys(hass.states).filter(okDomain).filter((eid) => {
+        const a = areaOf(eid);
+        return eid.includes(s) || nameOf(eid).toLowerCase().includes(s) || (a && areas[a] && areas[a].name.toLowerCase().includes(s));
+      }));
+      show(hits, `Suchergebnisse (${hits.length})`);
+    });
+    if (typeof opts.value === "string" && opts.value) show([opts.value], "Aktuelle Auswahl");
+
+    const clear = this._button("Leeren", true);
+    clear.style.marginRight = "auto";
+    const cancel = this._button("Abbrechen", true);
+    foot.append(clear, cancel);
+    return this._runDialog(dlg, (finish) => {
+      finishRef = finish;
+      clear.addEventListener("click", () => finish({ value: "" }));
+      cancel.addEventListener("click", () => finish(null));
+      setTimeout(() => q.focus(), 300);
+    });
   }
 
   // Öffnet den originalen HA-Dialog „Auslöser/Bedingung/Aktion hinzufügen“

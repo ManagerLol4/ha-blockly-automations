@@ -78,7 +78,34 @@
     addItem: null,               // (block, inputName, kind) -> HA-Dialog „… hinzufügen“
     describe: () => "",          // (kind, item) -> Klartext-Satz für den Einfach-Modus
     simple: false,               // Einfach-Modus: Klartext statt Eingabefelder
+    pickField: null,             // (block, chip) -> Auswahlfenster für eine Option
+    chipText: () => "",          // (chip, value, raw) -> Anzeige des Werts
   };
+
+  // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
+  // Zeiträume (Std/Min/Sek) werden zu einem Wert zusammengefasst, Profi-Optionen
+  // und leere Dienst-Felder nur gezeigt, wenn sie gesetzt sind.
+  function simpleChips(spec, raw) {
+    const out = [];
+    const seenDur = new Set();
+    for (const f of spec.fields) {
+      if (f.dur) {
+        if (seenDur.has(f.durPath)) continue;
+        seenDur.add(f.durPath);
+        if (getPath(raw, f.durPath) === undefined && f.show === "present") continue;
+        out.push({ path: f.durPath, label: f.dur, type: "duration", row: f.row && f.row !== f.durPath ? f.row : undefined });
+        continue;
+      }
+      const v = getPath(raw, f.path);
+      if (v === undefined && (f.show === "present" || f.adv || f.path.startsWith("data."))) continue;
+      if (f.type === "service") { out.push({ ...f, label: "Aktion", type: "service" }); continue; }
+      if (f.path === "target.entity_id") { out.push({ ...f, path: "target", label: "Ziel", type: "target", required: true }); continue; }
+      if (f.path.startsWith("target.")) continue;
+      const required = ["entity_id", "zone", "at", "state", "event"].includes(f.path);
+      out.push({ ...f, required });
+    }
+    return out;
+  }
 
   // Blöcke ohne verschachtelte Listen können im nativen HA-Dialog bearbeitet werden.
   const STRUCTURAL = ["choose", "if", "repeat", "parallel", "sequence", "wait_for_trigger"];
@@ -119,9 +146,9 @@
       const units = ["hours", "minutes", "seconds"];
       for (const k of keys) if (!units.includes(k)) units.push(k);
       if (keys.includes("days")) units.splice(units.indexOf("days"), 1), units.unshift("days");
-      return units.map((u, i) => F(`${path}.${u}`, (i === 0 ? label + " " : "") + (UNIT[u] || u), { row: path, numeric: true, type: "number" }));
+      return units.map((u, i) => F(`${path}.${u}`, (i === 0 ? label + " " : "") + (UNIT[u] || u), { row: path, numeric: true, type: "number", dur: label, durPath: path }));
     }
-    return [F(path, label)];
+    return [F(path, label, { dur: label, durPath: path })];
   }
 
   // ---------- Spezifikationen ----------
@@ -129,13 +156,13 @@
     const key = t.trigger !== undefined ? "trigger" : "platform";
     const p = t[key];
     const mk = (title, fields, colour = C.trigger, extra = {}) => ({
-      title, colour, fields: [...fields, F("id", "ID")], lists: [], ...extra,
+      title, colour, fields: [...fields, F("id", "ID", { adv: true })], lists: [], ...extra,
     });
     switch (p) {
       case "state":
         return mk("🔁 Zustand ändert sich", [
           F("entity_id", "Entität", { type: "entity" }),
-          F("attribute", "Attribut"),
+          F("attribute", "Attribut", { adv: true }),
           F("from", "von", { type: "state", of: "entity_id", row: "ft" }),
           F("to", "zu", { type: "state", of: "entity_id", row: "ft" }),
           P("not_from", "nicht von", { type: "state", of: "entity_id", row: "nft" }),
@@ -145,7 +172,7 @@
       case "numeric_state":
         return mk("📈 Zahlenwert", [
           F("entity_id", "Entität", { type: "entity", domains: ["sensor", "number", "input_number", "climate", "weather"] }),
-          F("attribute", "Attribut"),
+          F("attribute", "Attribut", { adv: true }),
           F("above", "über", { numeric: true, row: "ab" }),
           F("below", "unter", { numeric: true, row: "ab" }),
           P("value_template", "Wert-Template", { type: "template" }),
@@ -207,7 +234,7 @@
       case "state":
         return mk("🔎 Zustand ist", [
           F("entity_id", "Entität", { type: "entity" }),
-          F("attribute", "Attribut"),
+          F("attribute", "Attribut", { adv: true }),
           F("state", "Zustand", { type: "state", of: "entity_id" }),
           ...duration(c, "for", "seit"),
           P("match", "Treffer", { type: "select", options: [["alle", "all"], ["einer", "any"]] }),
@@ -215,7 +242,7 @@
       case "numeric_state":
         return mk("📏 Zahlenwert", [
           F("entity_id", "Entität", { type: "entity", domains: ["sensor", "number", "input_number", "climate", "weather"] }),
-          F("attribute", "Attribut"),
+          F("attribute", "Attribut", { adv: true }),
           F("above", "über", { numeric: true, row: "ab" }),
           F("below", "unter", { numeric: true, row: "ab" }),
           P("value_template", "Wert-Template", { type: "template" }),
@@ -269,7 +296,7 @@
     else if (t === "duration") o.type = "json";
     else if (["object", "color_rgb", "area", "device", "media"].includes(t)) o.type = "json";
     else if (t === "time") o.type = "time";
-    return F(path, label, o);
+    return F(path, label, { ...o, sel });
   }
   function serviceDataFields(a, svc) {
     const fields = [];
@@ -564,11 +591,14 @@
       build_(raw) {
         this.raw_ = raw;
         const spec = specFor(this.haKind_, raw);
-        // Einfach-Modus: keine Eingabefelder, sondern ein Klartext-Satz; Bearbeiten im HA-Dialog.
+        // Einfach-Modus: statt Eingabefeldern anklickbare Werte („Chips“), die ein
+        // Auswahlfenster im HA-Stil öffnen. Gespeichert wird über replaceBlock (verlustfrei).
         const simpleBlock = hooks.simple && hooks.openEditor && nativeEditable(this.haKind_, raw);
         if (hooks.simple && this.haKind_ === "root") spec.fields = spec.fields.filter((f) => f.path === "alias");
+        const chips = simpleBlock && hooks.pickField ? simpleChips(spec, raw) : [];
         if (simpleBlock) spec.fields = [];
         this.spec_ = spec;
+        this.chips_ = chips;
         this.setColour(spec.colour);
         const head = this.appendDummyInput("HEAD");
         head.appendField(spec.title, "TITLE");
@@ -577,7 +607,26 @@
           head.appendField(new Blockly.FieldImage(GEAR, 16, 16, "Eigenschaften", () => hooks.openEditor(block)), "GEAR");
           if (!spec.generic) this.setTooltip("Zahnrad oder Auswahlfeld anklicken: Eigenschaften im HA-Dialog bearbeiten");
         }
-        if (simpleBlock) {
+        if (simpleBlock && chips.length) {
+          const block = this;
+          const rowsC = {};
+          chips.forEach((c, i) => {
+            let inp = c.row && rowsC[c.row];
+            if (!inp) {
+              inp = this.appendDummyInput("C" + i);
+              if (c.row) rowsC[c.row] = inp;
+            }
+            if (c.label) inp.appendField(c.label);
+            let txt = "";
+            try { txt = hooks.chipText(c, getPath(raw, c.path), raw) || ""; } catch (e) { txt = ""; }
+            if (!txt) txt = c.required ? "⚠ wählen …" : "–";
+            if (txt.length > 46) txt = txt.slice(0, 45) + "…";
+            inp.appendField(new FieldButton(txt, () => hooks.pickField(block, c), "ha-chip"), "CH" + i);
+          });
+          let full = "";
+          try { full = hooks.describe(this.haKind_, raw) || ""; } catch (e) { full = ""; }
+          this.setTooltip((full ? full + "\n\n" : "") + "Werte anklicken zum Auswählen · ⚙ für alle Einstellungen");
+        } else if (simpleBlock) {
           const block = this;
           let text = "";
           try { text = hooks.describe(this.haKind_, raw) || ""; } catch (e) { text = ""; }
@@ -889,7 +938,7 @@
     return null;
   }
 
-  const api = { TEMPLATES, missingInfo, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);
