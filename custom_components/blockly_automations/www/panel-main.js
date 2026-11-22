@@ -152,7 +152,7 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
       el.addEventListener(ev, (e) => e.stopPropagation());
     }
     this.appendChild(el);
-    await new Promise((r) => requestAnimationFrame(r));
+    await new Promise((r) => setTimeout(r, 50));
     const dialog = () => {
       const ha = document.querySelector("home-assistant");
       return ha && ha.shadowRoot && ha.shadowRoot.querySelector("add-automation-element-dialog");
@@ -163,14 +163,18 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
       el.remove();
       return undefined;
     }
-    // Warten, bis der Dialog offen war und wieder zu ist.
+    // Warten, bis der Dialog offen war und wieder zu ist (HA entfernt ihn nach dem Schließen).
     let opened = false;
-    for (let i = 0; i < 6000; i++) {
+    const t0 = Date.now();
+    for (;;) {
       await new Promise((r) => setTimeout(r, 150));
       const d = dialog();
-      const isOpen = !!(d && d._params);
+      const isOpen = !!(d && d.isConnected && (d.params || d._params) && !d._closing);
       if (isOpen) opened = true;
-      if ((opened && !isOpen) || (!opened && i > 40)) break;
+      if (opened && !isOpen) break;
+      // Dialog nie gefunden (andere HA-Version): auf ein Ergebnis oder max. 10 Minuten warten.
+      if (!opened && (added.length || Date.now() - t0 > 600000)) break;
+      if (Date.now() - t0 > 3600000) break;
     }
     await new Promise((r) => setTimeout(r, 200));
     el.remove();

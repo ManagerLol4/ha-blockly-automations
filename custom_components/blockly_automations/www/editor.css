@@ -72,8 +72,15 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 .menu button:hover { background: var(--hover); }
 body:not(.expert) .expertOnly { display: none; }
 body.expert #expert { background: var(--accent); color: #fff; border-color: var(--accent); }
-.blocklyText.ha-sentence { font-size: 13px; font-weight: 600; text-decoration: underline dotted; cursor: pointer; }
-.blocklyText.ha-add { fill-opacity: .9; font-style: italic; cursor: pointer; }
+.blocklyText.ha-sentence { fill: #fff !important; font-size: 13px; font-weight: 600; cursor: pointer; }
+.blocklyText.ha-add { fill: #fff !important; fill-opacity: .85; font-style: italic; cursor: pointer; }
+.blocklyText.ha-sentence:hover, .blocklyText.ha-add:hover { fill-opacity: 1; text-decoration: underline; }
+#bar { flex-wrap: nowrap; }
+#bar > * { flex-shrink: 0; }
+#bar .title { flex-shrink: 1; min-width: 60px; max-width: 280px; }
+#bar #status { flex: 1 1 auto; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bar .spacer { display: none; }
+@media (max-width: 800px) { #bar { flex-wrap: wrap; } }
 .blocklyText.ha-entity-name { fill-opacity: .75; font-style: italic; }
 .blocklyText.ha-summary { fill-opacity: .85; font-family: Consolas, monospace; }
 @media (max-width: 800px) {
