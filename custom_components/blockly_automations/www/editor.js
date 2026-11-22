@@ -298,13 +298,15 @@
     const fn = parent.__haBlocklyEditItem;
     const item = HAB.blockToItem(block);
     const title = String(block.spec_ && block.spec_.title || "Eigenschaften").replace(/\s*\(deaktiviert\)$/, "");
-    if (!fn) { block.select(); showSide(); return; }
+    const unavailable = () => {
+      block.select();
+      if (isExpert()) { showSide(); status("HA-Fenster nicht verfügbar – Bearbeitung über das JSON-Feld rechts.", "warn"); }
+      else status("Das Auswahlfenster von Home Assistant ließ sich nicht öffnen. Bitte die Seite neu laden (F5) und noch einmal klicken.", "warn");
+    };
+    if (!fn) { unavailable(); return; }
     Blockly.hideChaff();
     const res = await fn(block.haKind_, item, title);
-    if (res === undefined) {
-      status("HA-Dialog nicht verfügbar – Bearbeitung über das JSON-Feld rechts.", "warn");
-      block.select(); showSide(); return;
-    }
+    if (res === undefined) { unavailable(); return; }
     if (res && !block.isDisposed() && !HAB.deepEqual(res, item)) replaceBlock(block, res);
   };
 
@@ -488,6 +490,7 @@
     return sel && sel.type && sel.type.startsWith("ha_") ? sel : null;
   }
   function showSide() {
+    if (!isExpert()) return;
     $("side").classList.remove("hidden");
     Blockly.svgResize(S.ws);
     updateSide();
@@ -886,10 +889,22 @@
   });
   const narrow = window.innerWidth < 800;
   const sidePref = store("haBlockly.side");
-  // JSON-Seitenleiste ist ein Expertenwerkzeug: standardmäßig zu.
-  if (sidePref !== "1") $("side").classList.add("hidden");
+  // JSON-Seitenleiste ist ein Expertenwerkzeug: im einfachen Modus nie sichtbar.
+  if (sidePref !== "1" || !isExpert()) $("side").classList.add("hidden");
   const listPref = store("haBlockly.list");
   if (listPref === "0" || (listPref === null && narrow)) $("list").classList.add("hidden");
+  // Neue Version installiert? Dann die ganze Seite neu laden (nur ohne ungespeicherte Änderungen).
+  const myVersion = decodeURIComponent(window.HAB_V || "");
+  setInterval(async () => {
+    try {
+      const r = await fetch("version.json", { cache: "no-store" });
+      const v = r.ok ? (await r.json()).version : null;
+      if (!v || v === myVersion) return;
+      const dirty = S.ws && S.original && (S.isNew || !HAB.deepEqual(currentConfig(), S.original));
+      if (dirty) status(`Version ${v} ist installiert – nach dem Speichern die Seite neu laden (F5).`, "warn");
+      else parent.location.reload();
+    } catch (e) { /* offline – später erneut */ }
+  }, 120000);
   window.addEventListener("beforeunload", (e) => {
     if (S.original && S.lossless && S.ws && !HAB.deepEqual(currentConfig(), S.original)) e.preventDefault();
   });
