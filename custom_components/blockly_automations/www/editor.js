@@ -80,6 +80,132 @@
   };
   HAB.hooks.serviceTarget = (svc) => { const def = svcDef(svc); return def ? !!def.target : null; };
 
+  // ---------- Klartext-Sätze für den Einfach-Modus ----------
+  const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const arr = (v) => (v === undefined || v === null || v === "" ? [] : [].concat(v));
+  const MISSING = "⚠ bitte wählen";
+  const ename = (eid) => {
+    if (typeof eid !== "string" || !eid) return MISSING;
+    const st = S.hass && S.hass.states[eid];
+    return (st && fname(st)) || eid;
+  };
+  const enames = (v) => (arr(v).length ? arr(v).map(ename).join(", ") : MISSING);
+  const stateText = (eid, val) => {
+    const vals = arr(val);
+    if (!vals.length) return "";
+    const first = typeof eid === "string" ? eid : arr(eid)[0];
+    const st = S.hass && first && S.hass.states[first];
+    return vals.map((v) => {
+      if (typeof v !== "string") return String(v);
+      try { if (st && S.hass.formatEntityState) return S.hass.formatEntityState(st, v); } catch (e) { /* weiter */ }
+      return v;
+    }).join(" oder ");
+  };
+  const UNITS = { days: "Tg", hours: "Std", minutes: "Min", seconds: "Sek", milliseconds: "ms" };
+  const durText = (d) => {
+    if (d === undefined || d === null || d === "") return "";
+    if (isObj(d)) return Object.entries(d).filter(([, v]) => v !== 0 && v !== "0").map(([k, v]) => `${v} ${UNITS[k] || k}`).join(" ") || "0 Sek";
+    if (typeof d === "number") return `${d} Sek`;
+    const m = /^(\d+):(\d+):(\d+)$/.exec(d);
+    if (m) return durText({ hours: +m[1], minutes: +m[2], seconds: +m[3] });
+    return String(d);
+  };
+  const timeText = (t) => (typeof t === "string" && /^\d\d:\d\d:00$/.test(t) ? t.slice(0, 5) : typeof t === "string" && t.includes(".") ? ename(t) : arr(t).join(", "));
+  const targetText = (tg, legacyEntity) => {
+    const parts = [];
+    if (legacyEntity !== undefined) parts.push(enames(legacyEntity));
+    if (isObj(tg)) {
+      if (tg.entity_id !== undefined) parts.push(enames(tg.entity_id));
+      const reg = (ids, table, key = "name") => arr(ids).map((id) => (S.hass[table] && S.hass[table][id] && (S.hass[table][id].name_by_user || S.hass[table][id][key])) || id);
+      if (tg.area_id) parts.push(...reg(tg.area_id, "areas"));
+      if (tg.floor_id) parts.push(...reg(tg.floor_id, "floors"));
+      if (tg.device_id) parts.push(...reg(tg.device_id, "devices"));
+      if (tg.label_id) parts.push(...arr(tg.label_id));
+    }
+    return parts.filter(Boolean).join(", ");
+  };
+  const deviceName = (id) => { const d = S.hass && S.hass.devices && S.hass.devices[id]; return d ? d.name_by_user || d.name : "Gerät"; };
+  const pretty = (s) => String(s || "").replace(/_/g, " ");
+  const forText = (x) => (x.for ? ` für ${durText(x.for)}` : "");
+  const newStyle = (kindKey, key, item) => {
+    // Neue HA-Auslöser/-Bedingungen wie "button.pressed" mit Ziel.
+    const [d, n] = key.split(".");
+    const name = loc(`component.${d}.${kindKey}.${n}.name`) || pretty(n);
+    const t = targetText(item.target);
+    return t ? `${name} · ${t}` : name;
+  };
+
+  HAB.hooks.describe = (kind, x) => {
+    if (!S.hass) return "";
+    if (kind === "trigger") {
+      const p = x.trigger !== undefined ? x.trigger : x.platform;
+      switch (p) {
+        case "state": {
+          const from = x.from !== undefined && x.from !== null ? ` von ${stateText(x.entity_id, x.from)}` : "";
+          const to = x.to !== undefined && x.to !== null ? ` auf ${stateText(x.entity_id, x.to)}` : "";
+          return `${enames(x.entity_id)} wechselt${from}${to || " (beliebig)"}${forText(x)}`;
+        }
+        case "numeric_state":
+          return `${enames(x.entity_id)}${x.attribute ? " (" + pretty(x.attribute) + ")" : ""}${x.above !== undefined ? " über " + (typeof x.above === "string" ? ename(x.above) : x.above) : ""}${x.below !== undefined ? " unter " + (typeof x.below === "string" ? ename(x.below) : x.below) : ""}${forText(x)}`;
+        case "time": return `Um ${timeText(x.at)} Uhr${x.weekday ? " (" + arr(x.weekday).join(", ") + ")" : ""}`;
+        case "time_pattern": return `Zeitmuster ${[x.hours !== undefined ? "Std " + x.hours : "", x.minutes !== undefined ? "Min " + x.minutes : "", x.seconds !== undefined ? "Sek " + x.seconds : ""].filter(Boolean).join(", ")}`;
+        case "sun": return `Bei ${x.event === "sunrise" ? "Sonnenaufgang" : "Sonnenuntergang"}${x.offset && !/^-?0+:0+:0+$/.test(x.offset) ? " (" + x.offset + ")" : ""}`;
+        case "zone": return `${enames(x.entity_id)} ${x.event === "leave" ? "verlässt" : "betritt"} ${ename(x.zone)}`;
+        case "template": return `Template wird wahr${forText(x)}`;
+        case "homeassistant": return x.event === "shutdown" ? "Beim Herunterfahren von Home Assistant" : "Beim Start von Home Assistant";
+        case "event": return `Ereignis „${x.event_type || "?"}“`;
+        case "mqtt": return `MQTT-Nachricht auf ${x.topic || "?"}`;
+        case "webhook": return "Webhook wird aufgerufen";
+        case "tag": return "NFC-Tag wird gescannt";
+        case "calendar": return `${ename(x.entity_id)}: Termin ${x.event === "end" ? "endet" : "beginnt"}`;
+        case "conversation": return `Sprachbefehl „${arr(x.command).join(" / ")}“`;
+        case "persistent_notification": return "Benachrichtigung ändert sich";
+        case "device": return `${deviceName(x.device_id)}: ${pretty(x.type)}${x.subtype !== undefined ? " " + pretty(x.subtype) : ""}`;
+        default: return typeof p === "string" && p.includes(".") ? newStyle("triggers", p, x) : `Auslöser „${p}“`;
+      }
+    }
+    if (kind === "condition") {
+      if (!isObj(x)) return "Template ist wahr";
+      switch (x.condition) {
+        case "state": return `${enames(x.entity_id)} ist ${stateText(x.entity_id, x.state) || MISSING}${forText(x)}`;
+        case "numeric_state": return `${enames(x.entity_id)}${x.above !== undefined ? " über " + x.above : ""}${x.below !== undefined ? " unter " + x.below : ""}`;
+        case "time": {
+          const parts = [];
+          if (x.after) parts.push("nach " + timeText(x.after));
+          if (x.before) parts.push("vor " + timeText(x.before));
+          if (x.weekday) parts.push("an " + arr(x.weekday).join(", "));
+          return "Zeit: " + (parts.join(", ") || "beliebig");
+        }
+        case "sun": return `Sonne: ${[x.after ? "nach " + (x.after === "sunrise" ? "Aufgang" : "Untergang") : "", x.before ? "vor " + (x.before === "sunrise" ? "Aufgang" : "Untergang") : ""].filter(Boolean).join(", ")}`;
+        case "zone": return `${enames(x.entity_id)} ist in ${ename(x.zone)}`;
+        case "trigger": return `Ausgelöst durch „${arr(x.id).join(" / ") || MISSING}“`;
+        case "template": return "Template ist wahr";
+        case "device": return `${deviceName(x.device_id)}: ${pretty(x.type)}`;
+        default: return typeof x.condition === "string" && x.condition.includes(".") ? newStyle("conditions", x.condition, x) : `Bedingung „${x.condition}“`;
+      }
+    }
+    if (kind === "action") {
+      if ("action" in x || "service" in x) {
+        const svc = x.action !== undefined ? x.action : x.service;
+        if (!svc) return "Aktion: " + MISSING;
+        const [d, s] = String(svc).split(".");
+        const name = loc(`component.${d}.services.${s}.name`) || pretty(svc);
+        const tg = targetText(x.target, x.entity_id);
+        const data = isObj(x.data) ? Object.entries(x.data).filter(([, v]) => v !== "" && typeof v !== "object").slice(0, 2)
+          .map(([k, v]) => `${loc(`component.${d}.services.${s}.fields.${k}.name`) || pretty(k)} ${String(v).length > 24 ? String(v).slice(0, 23) + "…" : v}`) : [];
+        return [name, tg, data.join(", ")].filter(Boolean).join(" · ");
+      }
+      if ("delay" in x) return `Warte ${durText(x.delay)}`;
+      if ("wait_template" in x) return `Warte, bis Template wahr ist${x.timeout ? " (höchstens " + durText(x.timeout) + ")" : ""}`;
+      if ("event" in x) return `Ereignis „${x.event || "?"}“ senden`;
+      if ("scene" in x) return `Szene ${ename(x.scene)} aktivieren`;
+      if ("stop" in x) return `Stopp${x.stop ? ": " + x.stop : ""}`;
+      if ("variables" in x) return `Variablen setzen: ${Object.keys(x.variables || {}).join(", ")}`;
+      if ("device_id" in x) return `${deviceName(x.device_id)}: ${pretty(x.type)}`;
+    }
+    return "";
+  };
+
   // Eigenschaften im nativen HA-Dialog bearbeiten (stellt das Panel bereit).
   HAB.hooks.openEditor = async (block) => {
     if (!block || block.isInFlyout || block.isDisposed()) return;
@@ -95,6 +221,47 @@
     }
     if (res && !block.isDisposed() && !HAB.deepEqual(res, item)) replaceBlock(block, res);
   };
+
+  // „＋ … hinzufügen“: originalen HA-Dialog öffnen und das Ergebnis als Block anhängen.
+  function appendToInput(block, inputName, kind, item) {
+    const input = block.getInput(inputName);
+    if (!input || !input.connection) return null;
+    Blockly.Events.setGroup(true);
+    try {
+      const nb = Blockly.serialization.blocks.append(HAB.itemToBlockJson(kind, item), S.ws);
+      let last = input.connection.targetBlock();
+      if (!last) input.connection.connect(nb.previousConnection);
+      else {
+        while (last.getNextBlock()) last = last.getNextBlock();
+        last.nextConnection.connect(nb.previousConnection);
+      }
+      nb.select();
+      return nb;
+    } finally {
+      Blockly.Events.setGroup(false);
+    }
+  }
+  async function addFromHA(block, inputName, kind) {
+    if (!block || block.isDisposed() || block.isInFlyout) return;
+    Blockly.hideChaff();
+    if (kind === "option") { appendToInput(block, inputName, "option", { conditions: [], sequence: [] }); return; }
+    const fn = parent.__haBlocklyAddItem;
+    const res = fn ? await fn(kind) : undefined;
+    if (res === undefined) { status("Die HA-Auswahl ist gerade nicht verfügbar – zieh einen Baustein aus dem Werkzeugkasten in die Lücke.", "warn"); return; }
+    if (!res.length || block.isDisposed()) return;
+    let last = null, lastItem = null;
+    for (const item of res) { last = appendToInput(block, inputName, HAB.classify(kind, item), item); lastItem = item; }
+    // Wie in HA: danach gleich die Einstellungen öffnen (außer das Ziel wurde schon gewählt).
+    if (last && HAB.nativeEditable(last.haKind_, last.raw_) && !(HAB.isObj(lastItem) && lastItem.target && !HAB.missingInfo(lastItem))) {
+      await HAB.hooks.openEditor(last);
+    }
+  }
+  HAB.hooks.addItem = (block, inputName, kind) => addFromHA(block, inputName, kind);
+
+  // Einfach- oder Expertenmodus (Experte: Eingabefelder, alle Bausteine, JSON).
+  const isExpert = () => store("haBlockly.expert") === "1";
+  HAB.hooks.simple = !isExpert();
+  document.body.classList.toggle("expert", isExpert());
 
   HAB.defineBlocks(Blockly);
 
@@ -140,6 +307,10 @@
       zoom: { controls: true, wheel: false, startScale: 0.8, maxScale: 2, minScale: 0.3 },
       move: { scrollbars: true, drag: true, wheel: true },
     });
+    const rootAdd = (i, kind) => () => { const r = rootBlock(); if (r) addFromHA(r, "L" + i, kind); };
+    S.ws.registerButtonCallback("addTrigger", rootAdd(0, "trigger"));
+    S.ws.registerButtonCallback("addCondition", rootAdd(1, "condition"));
+    S.ws.registerButtonCallback("addAction", rootAdd(2, "action"));
     S.ws.addChangeListener((e) => {
       if (e.type === Blockly.Events.SELECTED) updateSide();
       if (!e.isUiEvent && !S.busy) { updateStatus(); updateSide(); }
@@ -199,12 +370,30 @@
     }
     const changed = S.isNew || !HAB.deepEqual(currentConfig(), S.original);
     const loose = looseCount();
+    const missing = markMissing();
     $("save").disabled = false;
     $("save").classList.toggle("primary", changed);
-    let txt = S.isNew ? "✚ Neu – noch nicht in HA gespeichert"
-      : changed ? "● Geändert – noch nicht gespeichert" : "Keine Änderungen";
-    if (loose) txt += ` · ${loose} lose Blöcke werden nicht gespeichert`;
-    status(txt, changed || loose ? "warn" : "");
+    let txt = S.isNew ? "✚ Neu – noch nicht gespeichert"
+      : changed ? "● Geändert – noch nicht gespeichert" : "Alles gespeichert";
+    if (missing) txt += ` · ${missing}× fehlt noch eine Auswahl (⚠ am Baustein)`;
+    if (loose) txt += ` · ${loose} Baustein(e) hängen nirgends dran`;
+    status(txt, changed || loose || missing ? "warn" : "");
+  }
+
+  // Gelbes Warnzeichen an Bausteinen, bei denen noch etwas ausgewählt werden muss.
+  function markMissing() {
+    let n = 0;
+    for (const b of S.ws.getAllBlocks(false)) {
+      if (b.type === "ha_root" || b.isInFlyout) continue;
+      let msg = null;
+      try { msg = HAB.missingInfo(HAB.blockToItem(b)); } catch (e) { msg = null; }
+      if (msg) n++;
+      if ((b.__habWarn || null) !== msg) {
+        b.__habWarn = msg;
+        try { b.setWarningText(msg ? msg + " – zum Ändern anklicken" : null); } catch (e) { /* optional */ }
+      }
+    }
+    return n;
   }
 
   // ---------- JSON-Seitenleiste ----------
@@ -407,9 +596,9 @@
   }
 
   // ---------- Laden / Speichern ----------
-  function newAutomation() {
+  function newAutomation(factory = HAB.NEW_AUTOMATION) {
     if (!confirmDiscard()) return;
-    const cfg = HAB.NEW_AUTOMATION();
+    const cfg = factory();
     S.pendingCat = catOfCurrent();
     S.id = String(Date.now());
     S.isNew = true;
@@ -470,7 +659,9 @@
     await new Promise((r) => setTimeout(r, 30));
     const cfg = currentConfig();
     if (!S.isNew && HAB.deepEqual(cfg, S.original)) { updateStatus(); return; }
-    if (looseCount() && !confirm(`${looseCount()} Blöcke hängen nicht an der Automation und werden nicht gespeichert. Trotzdem speichern?`)) return;
+    if (looseCount() && !confirm(`${looseCount()} Baustein(e) hängen nicht an der Automation und werden nicht gespeichert. Trotzdem speichern?`)) return;
+    const missing = markMissing();
+    if (missing && !confirm(`Bei ${missing} Baustein(en) fehlt noch eine Auswahl (⚠). Home Assistant lehnt das evtl. ab. Trotzdem speichern?`)) return;
     $("save").disabled = true;
     status("Speichere …");
     try {
@@ -490,7 +681,7 @@
       if (HAB.deepEqual(back, cfg)) status("✓ In Home Assistant gespeichert", "ok");
       else { status("Gespeichert – HA hat die Daten angepasst, neu geladen.", "warn"); await load(S.id); }
     } catch (e) {
-      status("Fehler beim Speichern: " + errText(e), "warn");
+      status("Nicht gespeichert – Home Assistant meldet: " + errText(e), "warn");
       $("save").disabled = false;
     }
   }
@@ -552,7 +743,32 @@
   };
 
   $("search").addEventListener("input", (e) => { S.search = e.target.value; renderList(); });
-  $("new").addEventListener("click", newAutomation);
+  // „＋ Neu“: Menü mit leerer Automation und Vorlagen.
+  const menu = $("newMenu");
+  menu.innerHTML = '<div class="mh">Neue Automation</div>';
+  for (const t of HAB.TEMPLATES) {
+    const b = document.createElement("button");
+    b.textContent = t === HAB.TEMPLATES[0] ? "Leer beginnen" : "Vorlage: " + t.name;
+    b.addEventListener("click", () => { menu.classList.add("hidden"); newAutomation(t.cfg); });
+    menu.appendChild(b);
+  }
+  $("new").addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("hidden"); });
+  document.addEventListener("click", (e) => { if (!menu.contains(e.target)) menu.classList.add("hidden"); });
+  $("undo").addEventListener("click", () => S.ws && S.ws.undo(false));
+  $("redo").addEventListener("click", () => S.ws && S.ws.undo(true));
+  $("expert").addEventListener("click", () => {
+    const on = !isExpert();
+    store("haBlockly.expert", on ? "1" : "0");
+    document.body.classList.toggle("expert", on);
+    HAB.hooks.simple = !on;
+    if (!on) $("side").classList.add("hidden");
+    if (!S.ws) return;
+    S.ws.updateToolbox(HAB.buildToolbox());
+    const cfg = currentConfig();
+    if (cfg) { S.busy = true; loadIntoWorkspace(S.ws, cfg); S.busy = false; showRoot(); updateStatus(); updateSide(); }
+    Blockly.svgResize(S.ws);
+    status(on ? "Expertenmodus: Eingabefelder und alle Bausteine" : "Einfacher Modus", "ok");
+  });
   $("newCat").addEventListener("click", createCategory);
   $("category").addEventListener("change", async (e) => {
     let v = e.target.value;

@@ -1,0 +1,19 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Blockly Automations",
+        "description": "Adds an \"Automationen\" sidebar panel that shows your automations as blocks and saves them back as normal Home Assistant automations."
+      }
+    },
+    "abort": {
+      "already_configured": "Blockly Automations is already set up."
+    }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "Blockly Automations: restart required",
+      "description": "Version {version} has been installed and contains changes that only take effect after a restart of Home Assistant. Restart Home Assistant when convenient (Settings → System → Restart). The editor itself already uses the new version."
+    }
+  }
+}

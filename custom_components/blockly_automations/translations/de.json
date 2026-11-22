@@ -9,5 +9,11 @@
     "abort": {
       "already_configured": "Blockly Automations ist bereits eingerichtet."
     }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "Blockly Automations: Neustart erforderlich",
+      "description": "Version {version} wurde installiert und enthält Änderungen, die erst nach einem Neustart von Home Assistant wirken. Starte Home Assistant bei Gelegenheit neu (Einstellungen → System → Neu starten). Der Editor selbst nutzt die neue Version bereits."
+    }
   }
 }

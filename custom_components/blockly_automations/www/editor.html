@@ -4,34 +4,44 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Blockly Automations</title>
-  <link rel="stylesheet" href="editor.css">
-  <script src="vendor/blockly_compressed.js"></script>
-  <script src="vendor/msg_de.js"></script>
+  <script>
+    // Alle Dateien mit Versionsnummer laden, damit nach einem Update nie alte Dateien aus dem Browser-Cache kommen.
+    window.HAB_V = encodeURIComponent(new URLSearchParams(location.search).get("v") || Date.now());
+    document.write('<link rel="stylesheet" href="editor.css?v=' + HAB_V + '">');
+    document.write('<script src="vendor/blockly_compressed.js?v=' + HAB_V + '"><\/script>');
+    document.write('<script src="vendor/msg_de.js?v=' + HAB_V + '"><\/script>');
+  </script>
 </head>
 <body>
   <header id="bar">
     <button id="menu" class="icon" title="HA-Seitenleiste">&#9776;</button>
-    <button id="toggleList" class="icon" title="Automationsliste ein/aus">&#128194;</button>
+    <button id="toggleList" class="icon" title="Liste der Automationen ein/aus">&#128194;</button>
+    <div class="newWrap">
+      <button id="new" class="primary" title="Neue Automation anlegen">＋ Neu</button>
+      <div id="newMenu" class="menu hidden"></div>
+    </div>
     <b id="title" class="title">–</b>
-    <label class="cat" title="Kategorie dieser Automation">
-      <span>Kategorie</span>
+    <label class="cat" title="Kategorie (Ordner) dieser Automation">
+      <span>Ordner</span>
       <select id="category"></select>
     </label>
     <span id="status"></span>
     <span class="spacer"></span>
-    <button id="reload" title="Aus HA neu laden">Neu laden</button>
+    <button id="undo" class="icon" title="Rückgängig (Strg+Z)">&#8630;</button>
+    <button id="redo" class="icon" title="Wiederholen (Strg+Y)">&#8631;</button>
+    <button id="reload" title="Änderungen verwerfen und neu laden">Verwerfen</button>
     <button id="save" class="primary">Speichern</button>
-    <button id="toggleSide" title="JSON-Seitenleiste ein/aus">JSON</button>
+    <button id="expert" class="icon" title="Expertenmodus: Eingabefelder, alle Bausteine, JSON">&#128295;</button>
+    <button id="toggleSide" class="expertOnly" title="JSON-Seitenleiste ein/aus">JSON</button>
   </header>
   <main>
     <nav id="list">
       <div class="listHead">
-        <input id="search" type="search" placeholder="Suchen …" autocomplete="off">
-        <button id="new" class="icon" title="Neue Automation">＋</button>
-        <button id="newCat" class="icon" title="Neue Kategorie (Ordner)">&#128193;</button>
+        <input id="search" type="search" placeholder="Automation suchen …" autocomplete="off">
+        <button id="newCat" class="icon" title="Neuen Ordner (Kategorie) anlegen">&#128193;</button>
       </div>
       <div id="tree"></div>
-      <div class="listFoot">Automationen per Drag &amp; Drop in einen Ordner ziehen, um die Kategorie zu ändern.</div>
+      <div class="listFoot">Tipp: Automationen mit der Maus in einen anderen Ordner ziehen.</div>
     </nav>
     <div id="ws"></div>
     <aside id="side">
@@ -43,7 +53,9 @@
       </div>
     </aside>
   </main>
-  <script src="ha_blocks.js"></script>
-  <script src="editor.js"></script>
+  <script>
+    document.write('<script src="ha_blocks.js?v=' + HAB_V + '"><\/script>');
+    document.write('<script src="editor.js?v=' + HAB_V + '"><\/script>');
+  </script>
 </body>
 </html>

@@ -75,6 +75,9 @@
     serviceFields: () => null,   // ("light.turn_on") -> {key: {selector, name}}
     serviceTarget: () => null,   // ("light.turn_on") -> true/false (hat ein Ziel), null = unbekannt
     openEditor: null,            // (block) -> öffnet den nativen HA-Eigenschaften-Dialog
+    addItem: null,               // (block, inputName, kind) -> HA-Dialog „… hinzufügen“
+    describe: () => "",          // (kind, item) -> Klartext-Satz für den Einfach-Modus
+    simple: false,               // Einfach-Modus: Klartext statt Eingabefelder
   };
 
   // Blöcke ohne verschachtelte Listen können im nativen HA-Dialog bearbeitet werden.
@@ -90,6 +93,7 @@
   // ---------- Farben ----------
   const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50 };
   const NONE = "__ha_none__";
+  const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen" };
   const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#fff" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64z"/></svg>');
   const UNIT = { days: "Tg", hours: "Std", minutes: "Min", seconds: "Sek", milliseconds: "ms" };
@@ -359,7 +363,7 @@
         }),
         ...(cfg.mode === "queued" || cfg.mode === "parallel" || cfg.max !== undefined ? [F("max", "max.", { numeric: true, row: "mode" })] : []),
       ],
-      lists: [L(pick("triggers", "trigger"), "Auslöser", "trigger"), L(pick("conditions", "condition"), "Bedingungen", "condition"), L(pick("actions", "action"), "Aktionen", "action")],
+      lists: [L(pick("triggers", "trigger"), "WENN", "trigger"), L(pick("conditions", "condition"), "NUR WENN", "condition"), L(pick("actions", "action"), "DANN", "action")],
     };
   }
 
@@ -471,6 +475,20 @@
   // ---------- Blockly-Blöcke ----------
   function defineBlocks(Blockly) {
     // Textfeld mit Vorschlagsliste (<datalist>): Entitäten, Zustände, Dienste.
+    // Anklickbarer Text (z. B. „＋ Auslöser hinzufügen“ oder der Klartext-Satz eines Blocks).
+    class FieldButton extends Blockly.FieldLabel {
+      constructor(text, onClick, cls) {
+        super(text, cls);
+        this.onClick_ = onClick;
+        this.EDITABLE = true;
+        this.SERIALIZABLE = true; // nur Anzeige; der Wert wird beim Laden neu berechnet
+      }
+      showEditor_() {
+        const b = this.getSourceBlock();
+        if (this.onClick_ && b && !b.isInFlyout) this.onClick_();
+      }
+    }
+
     let dlCount = 0;
     class FieldSuggest extends Blockly.FieldTextInput {
       constructor(value, provider) {
@@ -546,6 +564,10 @@
       build_(raw) {
         this.raw_ = raw;
         const spec = specFor(this.haKind_, raw);
+        // Einfach-Modus: keine Eingabefelder, sondern ein Klartext-Satz; Bearbeiten im HA-Dialog.
+        const simpleBlock = hooks.simple && hooks.openEditor && nativeEditable(this.haKind_, raw);
+        if (hooks.simple && this.haKind_ === "root") spec.fields = spec.fields.filter((f) => f.path === "alias");
+        if (simpleBlock) spec.fields = [];
         this.spec_ = spec;
         this.setColour(spec.colour);
         const head = this.appendDummyInput("HEAD");
@@ -555,9 +577,18 @@
           head.appendField(new Blockly.FieldImage(GEAR, 16, 16, "Eigenschaften", () => hooks.openEditor(block)), "GEAR");
           if (!spec.generic) this.setTooltip("Zahnrad oder Auswahlfeld anklicken: Eigenschaften im HA-Dialog bearbeiten");
         }
-        if (spec.generic) {
+        if (simpleBlock) {
+          const block = this;
+          let text = "";
+          try { text = hooks.describe(this.haKind_, raw) || ""; } catch (e) { text = ""; }
+          if (!text) text = spec.generic ? short(raw, 60) : "Einstellungen öffnen";
+          const full = text;
+          if (text.length > 70) text = text.slice(0, 69) + "…";
+          this.appendDummyInput("SUM").appendField(new FieldButton(text, () => hooks.openEditor(block), "ha-sentence"), "SUM");
+          this.setTooltip(full + "\n\nKlicken, um es im Home-Assistant-Dialog zu ändern.");
+        } else if (spec.generic) {
           this.appendDummyInput("SUM").appendField(new Blockly.FieldLabel(short(raw, 60), "ha-summary"));
-          this.setTooltip("Wird unverändert übernommen. Bearbeiten über das JSON-Feld rechts.");
+          this.setTooltip("Wird unverändert übernommen. Bearbeiten über das Zahnrad oder das JSON-Feld.");
         }
         this.fieldMap_ = [];
         const rows = {};
@@ -616,6 +647,11 @@
           const orig = getPath(raw, l.path);
           this.appendStatementInput(name).setCheck(CHECK_LIST[l.kind]).appendField(l.label);
           this.listMap_.push({ name, path: l.path, orig, single: orig !== undefined && orig !== null && !Array.isArray(orig) });
+          if (hooks.addItem && !this.isInFlyout) {
+            const block = this;
+            this.appendDummyInput("ADD" + i).appendField(
+              new FieldButton(ADD_LABEL[l.kind] || "＋ hinzufügen", () => hooks.addItem(block, name, l.kind), "ha-add"), "ADDB" + i);
+          }
         });
       },
     };
@@ -704,6 +740,44 @@
       tb("action", { variables: { name: "wert" } }),
     ].filter((x) => x.kind === "label" || !x.extraState.raw.action || x.extraState.raw.action === "" || !services.length || has(x.extraState.raw.action));
 
+    const btn = (text, callbackKey) => ({ kind: "button", text, callbackKey });
+
+    // Einfach-Modus: wenige, verständliche Bausteine; alles andere über den HA-Dialog.
+    if (hooks.simple) {
+      return {
+        kind: "categoryToolbox",
+        contents: [
+          { kind: "category", name: "Wenn …", colour: String(C.trigger), contents: [
+            btn("＋ Auslöser aus Home Assistant wählen …", "addTrigger"),
+            label("oder einen Baustein in die WENN-Lücke ziehen:"),
+            tb("trigger", { trigger: "state", entity_id: "" }),
+            tb("trigger", { trigger: "time", at: "07:00:00" }),
+            tb("trigger", { trigger: "sun", event: "sunset" }),
+          ] },
+          { kind: "category", name: "Nur wenn …", colour: String(C.condition), contents: [
+            btn("＋ Bedingung aus Home Assistant wählen …", "addCondition"),
+            label("oder einen Baustein in die NUR-WENN-Lücke ziehen:"),
+            tb("condition", { condition: "state", entity_id: "", state: "" }),
+            tb("condition", { condition: "time", after: "08:00:00", before: "22:00:00" }),
+            tb("condition", { condition: "or", conditions: [] }),
+          ] },
+          { kind: "category", name: "Dann …", colour: String(C.action), contents: [
+            btn("＋ Aktion aus Home Assistant wählen …", "addAction"),
+            label("oder einen Baustein in die DANN-Lücke ziehen:"),
+            svc("light.turn_on"), svc("light.turn_off"),
+            tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
+            tb("action", { delay: { hours: 0, minutes: 1, seconds: 0 } }),
+          ] },
+          { kind: "category", name: "Ablauf", colour: String(C.flow), contents: [
+            label("Verzweigen und wiederholen:"),
+            tb("action", { if: [], then: [], else: [] }),
+            tb("action", { choose: [{ conditions: [], sequence: [] }], default: [] }),
+            tb("action", { repeat: { count: 2, sequence: [] } }),
+          ] },
+        ],
+      };
+    }
+
     return {
       kind: "categoryToolbox",
       contents: [
@@ -769,7 +843,53 @@
     mode: "single",
   });
 
-  const api = { isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  // Vorlagen für typische Automationen (leere Felder werden im HA-Dialog ergänzt).
+  const TEMPLATES = [
+    { name: "Leere Automation", cfg: NEW_AUTOMATION },
+    { name: "Licht bei Bewegung", cfg: () => ({
+      alias: "Licht bei Bewegung", description: "Licht an bei Bewegung, nach 2 Minuten ohne Bewegung wieder aus.",
+      triggers: [
+        { trigger: "state", entity_id: "", to: "on", id: "bewegung" },
+        { trigger: "state", entity_id: "", to: "off", for: { minutes: 2 }, id: "ruhe" },
+      ],
+      conditions: [],
+      actions: [{ choose: [
+        { conditions: [{ condition: "trigger", id: "bewegung" }], sequence: [{ action: "light.turn_on", target: { entity_id: "" } }] },
+        { conditions: [{ condition: "trigger", id: "ruhe" }], sequence: [{ action: "light.turn_off", target: { entity_id: "" } }] },
+      ] }],
+      mode: "restart",
+    }) },
+    { name: "Meldung, wenn Fenster lange offen", cfg: () => ({
+      alias: "Fenster lange offen", description: "Meldet, wenn ein Fenster 15 Minuten offen ist.",
+      triggers: [{ trigger: "state", entity_id: "", to: "on", for: { minutes: 15 } }],
+      conditions: [],
+      actions: [{ action: "persistent_notification.create", data: { title: "Fenster offen", message: "Das Fenster ist seit 15 Minuten offen." } }],
+      mode: "single",
+    }) },
+    { name: "Jeden Tag zu einer Uhrzeit", cfg: () => ({
+      alias: "Täglich um 7 Uhr", description: "",
+      triggers: [{ trigger: "time", at: "07:00:00" }], conditions: [], actions: [], mode: "single",
+    }) },
+    { name: "Licht bei Sonnenuntergang", cfg: () => ({
+      alias: "Licht bei Sonnenuntergang", description: "",
+      triggers: [{ trigger: "sun", event: "sunset" }], conditions: [],
+      actions: [{ action: "light.turn_on", target: { entity_id: "" } }], mode: "single",
+    }) },
+  ];
+
+  // Findet Stellen, an denen noch eine Auswahl fehlt (für Warnhinweise am Block).
+  function missingInfo(item) {
+    if (!isObj(item)) return null;
+    const empty = (v) => v === "" || (Array.isArray(v) && v.length === 0);
+    if ("entity_id" in item && empty(item.entity_id)) return "Bitte noch eine Entität auswählen";
+    if (isObj(item.target) && "entity_id" in item.target && empty(item.target.entity_id) &&
+        !item.target.area_id && !item.target.device_id && !item.target.floor_id && !item.target.label_id) return "Bitte noch ein Ziel auswählen";
+    if ("action" in item && item.action === "") return "Bitte noch eine Aktion auswählen";
+    if ("state" in item && item.condition === "state" && empty(item.state)) return "Bitte noch einen Zustand auswählen";
+    return null;
+  }
+
+  const api = { TEMPLATES, missingInfo, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

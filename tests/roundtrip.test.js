@@ -150,4 +150,47 @@ ok("schema", () => {
   HAB.hooks.serviceFields = () => null;
 });
 
+// 11) Einfach-Modus: Werkzeugkasten und Vorlagen überstehen den Rundlauf; Root zeigt nur den Namen.
+ok("einfach", () => {
+  HAB.hooks.simple = true;
+  HAB.hooks.openEditor = () => {};
+  HAB.hooks.describe = () => "Satz";
+  for (const cat of HAB.buildToolbox().contents) {
+    for (const item of cat.contents.filter((x) => x.kind === "block")) {
+      const b = toBlocks(item.extraState.raw, item.type.slice(3));
+      assert.deepStrictEqual(HAB.blockToItem(b), item.extraState.raw);
+    }
+  }
+  for (const t of HAB.TEMPLATES) {
+    const cfg = t.cfg();
+    const r = toBlocks(cfg);
+    assert.deepStrictEqual(HAB.blockToItem(r), cfg, `Vorlage ${t.name}`);
+    assert.deepStrictEqual(r.fieldMap_.map((f) => f.path), ["alias"]);
+  }
+  // Einfache Blöcke haben keine Eingabefelder, bleiben aber verlustfrei.
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, "licht_choose.json"), "utf8"));
+  const r = toBlocks(cfg);
+  assert.deepStrictEqual(HAB.blockToItem(r), cfg);
+  assert.strictEqual(child(r, "L0").fieldMap_.length, 0);
+  HAB.hooks.simple = false;
+  HAB.hooks.openEditor = null;
+  HAB.hooks.describe = () => "";
+});
+
+// 12) Fehlende Auswahl wird erkannt.
+ok("fehlt", () => {
+  assert.ok(HAB.missingInfo({ trigger: "state", entity_id: "" }));
+  assert.ok(HAB.missingInfo({ action: "light.turn_on", target: { entity_id: "" } }));
+  assert.ok(!HAB.missingInfo({ action: "light.turn_on", target: { entity_id: "", area_id: "kueche" } }));
+  assert.ok(!HAB.missingInfo({ trigger: "button.pressed", target: { area_id: "badezimmer" } }));
+});
+
+// 13) Versionsnummern stimmen überein (manifest, package.json, version.json).
+ok("version", () => {
+  const read = (...p) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", ...p), "utf8")).version;
+  const m = read("custom_components", "blockly_automations", "manifest.json");
+  assert.strictEqual(read("package.json"), m);
+  assert.strictEqual(read("custom_components", "blockly_automations", "www", "version.json"), m);
+});
+
 console.log(`OK – ${n} Prüfungen bestanden`);
