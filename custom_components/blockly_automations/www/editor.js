@@ -95,7 +95,8 @@
     }
     const changed = !HAB.deepEqual(currentConfig(), S.original);
     const loose = looseCount();
-    $("save").disabled = !changed;
+    $("save").disabled = false;
+    $("save").classList.toggle("primary", changed);
     let txt = changed ? "● Geändert – noch nicht gespeichert" : "Keine Änderungen";
     if (loose) txt += ` · ${loose} lose Blöcke werden nicht gespeichert`;
     status(txt, changed || loose ? "warn" : "");
@@ -172,7 +173,8 @@
       S.lossless = HAB.deepEqual(currentConfig(), cfg);
       if (!S.lossless) console.warn("[Blockly Automations] Rundlauf nicht identisch", { original: cfg, blocks: currentConfig() });
       store("haBlockly.last", id);
-      S.ws.scrollCenter();
+      const r = rootBlock();
+      if (r) S.ws.scrollBoundsIntoView(r.getBoundingRectangleWithoutChildren());
       updateStatus(); updateSide();
     } catch (e) {
       S.busy = false;
@@ -182,13 +184,18 @@
 
   async function save() {
     if (!S.id || !S.lossless) return;
+    // Offenen Feld-Editor schließen, damit sein Wert sicher übernommen ist.
+    Blockly.hideChaff();
+    await new Promise((r) => setTimeout(r, 30));
     const cfg = currentConfig();
+    if (HAB.deepEqual(cfg, S.original)) { updateStatus(); return; }
     $("save").disabled = true;
     status("Speichere …");
     try {
       await api("POST", S.id, cfg);
       const back = await api("GET", S.id);
       S.original = back;
+      $("save").classList.remove("primary");
       if (HAB.deepEqual(back, cfg)) status("✓ In Home Assistant gespeichert", "ok");
       else { status("Gespeichert – HA hat die Daten angepasst, neu geladen.", "warn"); await load(S.id); }
     } catch (e) {
@@ -240,6 +247,9 @@
     load(e.target.value);
   });
   $("reload").addEventListener("click", () => { if (S.id && confirmDiscard()) load(S.id); });
+  // Speichern ist nie per disabled blockiert, solange ein Feld-Editor offen ist:
+  // pointerdown schließt ihn vor dem Klick.
+  $("bar").addEventListener("pointerdown", () => { Blockly.hideChaff(); setTimeout(updateStatus, 0); });
   $("save").addEventListener("click", save);
   $("applyJson").addEventListener("click", applyJson);
   $("menu").addEventListener("click", () => parent.__haBlocklyToggleMenu && parent.__haBlocklyToggleMenu());
@@ -249,7 +259,8 @@
     Blockly.svgResize(S.ws);
     updateSide();
   });
-  if (store("haBlockly.side") === "0") $("side").classList.add("hidden");
+  const sidePref = store("haBlockly.side");
+  if (sidePref === "0" || (sidePref === null && window.innerWidth < 800)) $("side").classList.add("hidden");
   window.addEventListener("beforeunload", (e) => {
     if (S.original && S.lossless && !HAB.deepEqual(currentConfig(), S.original)) e.preventDefault();
   });

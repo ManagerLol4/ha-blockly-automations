@@ -12,8 +12,6 @@ bearbeiten – Auslöser, Bedingungen und Aktionen als Puzzleteile.
 - **JSON-Seitenleiste:** Zeigt den gewählten Block oder die ganze Automation; dort lässt sich
   auch alles bearbeiten, wofür es noch keinen eigenen Block gibt.
 
-![Blockly Automations](docs/screenshot.png)
-
 ## Installation
 
 ### Über HACS (benutzerdefiniertes Repository)
