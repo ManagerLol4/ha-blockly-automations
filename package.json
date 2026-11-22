@@ -1,0 +1,14 @@
+{
+  "name": "ha-blockly-automations",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Home Assistant automations as Blockly blocks – tests and vendor update helper",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/roundtrip.test.js",
+    "vendor": "node scripts/update-vendor.js"
+  },
+  "devDependencies": {
+    "blockly": "13.5.0"
+  }
+}
