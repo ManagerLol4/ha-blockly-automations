@@ -287,10 +287,12 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
       return e.area_id || (e.device_id && devs[e.device_id] && devs[e.device_id].area_id) || null;
     };
     const okDomain = (eid) => !domains || domains.includes(eid.split(".")[0]);
+    // Technische (Diagnose/Konfiguration) und versteckte Entitäten nur über die Suche.
+    const everyday = (eid) => { const e = ents[eid]; return !e || (!e.entity_category && !e.hidden); };
     const nameOf = (eid) => (hass.states[eid] && hass.states[eid].attributes.friendly_name) || eid;
     const sortByName = (list) => list.sort((a, b) => nameOf(a).localeCompare(nameOf(b), "de"));
     const entitiesFor = (t) => {
-      const all = Object.keys(hass.states).filter(okDomain);
+      const all = Object.keys(hass.states).filter(okDomain).filter(everyday);
       if (t.entity_id) return [t.entity_id];
       if (t.device_id) return sortByName(all.filter((eid) => ents[eid] && ents[eid].device_id === t.device_id));
       if (t.area_id) return sortByName(all.filter((eid) => areaOf(eid) === t.area_id));
@@ -336,11 +338,37 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
         w.addEventListener("click", () => finishRef && finishRef({ value: whole }));
         right.appendChild(w);
       }
-      const h = document.createElement("div");
-      h.className = "head";
-      h.textContent = list.length ? heading : "Hier gibt es nichts Passendes.";
-      right.appendChild(h);
-      for (const eid of list.slice(0, 300)) right.appendChild(row(eid));
+      if (!list.length) {
+        const h = document.createElement("div");
+        h.className = "head";
+        h.textContent = "Hier gibt es nichts Passendes.";
+        right.appendChild(h);
+        return;
+      }
+      // Nach Art gruppieren (Licht, Schalter, Sensor …) wie in HA.
+      const groups = new Map();
+      for (const eid of list.slice(0, 400)) {
+        const d = eid.split(".")[0];
+        if (!groups.has(d)) groups.set(d, []);
+        groups.get(d).push(eid);
+      }
+      const title = (d) => {
+        try { return hass.localize(`component.${d}.title`) || hass.localize(`component.${d}.entity_component._.name`) || d; } catch (e) { return d; }
+      };
+      const sorted = [...groups.entries()].sort((a, b) => title(a[0]).localeCompare(title(b[0]), "de"));
+      if (heading && sorted.length > 1) {
+        const h0 = document.createElement("div");
+        h0.className = "head";
+        h0.textContent = heading;
+        right.appendChild(h0);
+      }
+      for (const [d, eids] of sorted) {
+        const h = document.createElement("div");
+        h.className = "head";
+        h.textContent = `${title(d)} (${eids.length})`;
+        right.appendChild(h);
+        for (const eid of eids) right.appendChild(row(eid));
+      }
     };
     tree.addEventListener("value-changed", (e) => {
       e.stopPropagation();

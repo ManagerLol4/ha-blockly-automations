@@ -38,8 +38,11 @@ Aufbau wie der Blockly-Skripteditor in ioBroker: links die Liste, rechts die Bau
    *Meldung, wenn Fenster lange offen*, *Jeden Tag zu einer Uhrzeit*, *Licht bei Sonnenuntergang*.
 3. **„＋ Auslöser/Bedingung/Aktion hinzufügen“** in jeder Lücke öffnet den originalen
    HA-Dialog. Danach öffnen sich direkt die Einstellungen des neuen Bausteins.
-4. **Auf einen Satz klicken** (z. B. „Tür Badezimmer wechselt auf Geöffnet“) oder auf ⚙ öffnet
-   die originale HA-Auswahl zum Ändern.
+4. **Werte im Baustein anklicken** (z. B. *Entität: Tür Badezimmer · zu: Geöffnet · für: 3 Sek*):
+   - Entität/Ziel öffnet ein Auswahlfenster wie der HA-Dialog – Suche oben, links Räume/Geräte als
+     Baum, rechts die passenden Entitäten nach Art gruppiert; bei Aktionen auch „ganzen Raum verwenden“.
+   - Zustand, Uhrzeit, Dauer, Zahl, Ja/Nein und Listen öffnen die originalen HA-Auswahlfelder.
+   - ⚙ öffnet alle Einstellungen des Bausteins im HA-Dialog.
 5. Bausteine lassen sich verschieben, kopieren und per Rechtsklick deaktivieren
    (= `enabled: false` in HA). ⚠ zeigt, wo noch etwas ausgewählt werden muss.
    ↶/↷ macht Schritte rückgängig.
