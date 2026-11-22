@@ -33,10 +33,18 @@ bearbeiten – Auslöser, Bedingungen und Aktionen als Puzzleteile.
 
 ## Bedienung
 
-1. Oben eine Automation wählen – sie erscheint als Blöcke. Oder **＋ Neu** für eine neue Automation.
-2. Blöcke aus dem Werkzeugkasten links (Auslöser, Bedingungen, Aktionen, Ablauf) in die Lücken
-   ziehen, Werte direkt im Block eintragen.
-   - Entitäts-, Zustands-, Dienst- und Uhrzeitfelder bieten beim Tippen Vorschläge aus deinem HA.
+Aufbau wie der Blockly-Skripteditor in ioBroker: links die Liste, in der Mitte die Blöcke.
+
+1. **Liste links:** Ordner = HA-Kategorien, mit Suche und Ein/Aus-Schalter je Automation.
+   Automationen per Drag & Drop in einen anderen Ordner ziehen oder oben über *Kategorie*
+   zuweisen; 📁 legt eine neue Kategorie an. Ein Klick öffnet die Automation als Blöcke,
+   **＋** legt eine neue an.
+2. Blöcke aus dem Werkzeugkasten (Auslöser, Bedingungen, Aktionen, Ablauf) in die Lücken
+   ziehen, einfache Werte direkt im Block eintragen.
+   - **Zahnrad ⚙ am Block** oder Klick auf ein Auswahlfeld (Entität, Zustand, Dienst) öffnet den
+     **originalen HA-Eigenschaften-Dialog** für diesen Auslöser, diese Bedingung oder Aktion –
+     mit Entitätssuche, Zustandsauswahl, Zielen und YAML-Umschalter. Das funktioniert auch für
+     Geräte-Auslöser und -Aktionen.
    - Dienst-Blöcke zeigen automatisch die Felder des gewählten Dienstes (z. B. Helligkeit bei
      `light.turn_on`). Leere Felder werden nicht gespeichert.
    - Rechtsklick → *Block deaktivieren* entspricht `enabled: false` in HA.
@@ -50,8 +58,8 @@ bearbeiten – Auslöser, Bedingungen und Aktionen als Puzzleteile.
 | Aktionen | Dienst aufrufen (Felder aus dem HA-Schema), Szene, Ereignis, Variablen |
 | Ablauf | Wenn/Dann/Sonst, Auswahl mit Optionen, Warten (Zeit/Template/Auslöser), Wiederholen (Anzahl/solange/bis), Parallel, Folge, Stopp |
 
-Geräte-Auslöser, -Bedingungen und -Aktionen werden angezeigt und unverändert erhalten; alles
-Übrige bearbeitest du über das JSON-Feld rechts.
+Geräte-Auslöser, -Bedingungen und -Aktionen werden als graue Blöcke angezeigt und im HA-Dialog
+(⚙) bearbeitet. Die JSON-Seitenleiste (Knopf *JSON*) bleibt als Expertenwerkzeug.
 
 ## Entwicklung
 

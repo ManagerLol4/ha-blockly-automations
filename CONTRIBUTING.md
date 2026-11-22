@@ -13,7 +13,7 @@ Wir bauen das zu zweit (oder mehr) – so bleibt es übersichtlich:
 | Datei | Inhalt |
 |---|---|
 | `custom_components/blockly_automations/__init__.py` | Registriert Panel + statische Dateien |
-| `www/panel.js` | Seitenleisten-Element, bettet den Editor als iframe ein |
+| `www/panel.js` | Seitenleisten-Element, bettet den Editor als iframe ein und öffnet den nativen HA-Eigenschaften-Dialog (`ha-automation-*-editor` in `ha-dialog`; hängt im Panel-Element, damit HA-Kontextdaten ankommen) |
 | `www/ha_blocks.js` | **Herzstück:** Blockdefinitionen und Umwandlung HA ↔ Blöcke |
 | `www/editor.js` | Laden/Speichern über die HA-API, JSON-Seitenleiste, Selbsttest |
 | `www/vendor/` | Blockly (Apache-2.0), aktualisieren mit `npm run vendor` |
