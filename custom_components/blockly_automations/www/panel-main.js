@@ -37,6 +37,15 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    // HA kann hass/panel/narrow setzen, bevor dieses Element (über den Lader
+    // panel.js) definiert ist. Solche vorab gesetzten Werte hier übernehmen.
+    for (const prop of ["panel", "narrow", "hass"]) {
+      if (Object.prototype.hasOwnProperty.call(this, prop)) {
+        const value = this[prop];
+        delete this[prop];
+        this[prop] = value;
+      }
+    }
     this._render();
   }
 
