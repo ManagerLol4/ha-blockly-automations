@@ -1,0 +1,11 @@
+{
+  "id": "legacy",
+  "alias": "Altes Format",
+  "trigger": { "platform": "sun", "event": "sunset", "offset": "-00:30:00" },
+  "condition": "{{ states('sun.sun') == 'below_horizon' }}",
+  "action": [
+    { "service": "light.turn_on", "entity_id": "light.wohnzimmer", "data_template": { "brightness": "{{ 100 }}" } },
+    { "delay": "00:00:10", "enabled": false },
+    { "wait_for_trigger": [{ "platform": "state", "entity_id": "light.wohnzimmer", "to": "off" }], "timeout": { "minutes": 5 } }
+  ]
+}

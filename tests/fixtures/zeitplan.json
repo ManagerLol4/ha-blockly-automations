@@ -1,0 +1,19 @@
+{
+  "id": "1700000000001",
+  "alias": "Heizung (Büro): Zeitplan",
+  "description": "Setzt die Temperaturen morgens und abends.",
+  "triggers": [
+    { "trigger": "time", "at": "08:00:00", "id": "tag" },
+    { "trigger": "time", "at": "22:00:00", "id": "nacht" }
+  ],
+  "actions": [
+    { "condition": "state", "entity_id": "person.someone", "state": "home" },
+    { "condition": "state", "entity_id": "binary_sensor.buero_fenster", "state": "off" },
+    {
+      "action": "climate.set_temperature",
+      "target": { "entity_id": "climate.buero" },
+      "data": { "temperature": "{{ 17 if trigger.id == 'nacht' else 19 }}" }
+    }
+  ],
+  "mode": "single"
+}

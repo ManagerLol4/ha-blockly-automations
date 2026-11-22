@@ -1,0 +1,38 @@
+:root {
+  --bg: #fafafa; --fg: #212121; --bar: #ffffff; --line: #e0e0e0;
+  --accent: #03a9f4; --warn: #e65100; --ok: #2e7d32; --input: #ffffff;
+}
+:root[data-theme="dark"] {
+  --bg: #111111; --fg: #e1e1e1; --bar: #1c1c1c; --line: #333333;
+  --accent: #03a9f4; --warn: #ffab40; --ok: #81c784; --input: #1a1a1a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+  font: 14px/1.4 Roboto, "Segoe UI", system-ui, sans-serif; }
+body { display: flex; flex-direction: column; }
+#bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+  background: var(--bar); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#bar .spacer { flex: 1; }
+button, select { font: inherit; color: var(--fg); background: var(--input);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.icon { font-size: 18px; padding: 2px 10px; }
+#picker { max-width: 360px; min-width: 160px; }
+#status { font-size: 13px; }
+#status.warn { color: var(--warn); font-weight: 600; }
+#status.ok { color: var(--ok); }
+main { flex: 1; display: flex; min-height: 0; }
+#ws { flex: 1; min-width: 0; position: relative; }
+#side { width: 380px; display: flex; flex-direction: column; border-left: 1px solid var(--line);
+  background: var(--bar); }
+#side.hidden { display: none; }
+.sideHead, .sideFoot { padding: 8px 10px; }
+.sideFoot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hint { font-size: 12px; opacity: .7; }
+#json { flex: 1; resize: none; border: 0; border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line); padding: 8px 10px; background: var(--input);
+  color: var(--fg); font: 12px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre; }
+@media (max-width: 800px) {
+  #side { position: absolute; right: 0; top: 52px; bottom: 0; width: 100%; z-index: 50; }
+}

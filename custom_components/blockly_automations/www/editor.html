@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blockly Automations</title>
+  <link rel="stylesheet" href="editor.css">
+  <script src="vendor/blockly_compressed.js"></script>
+  <script src="vendor/msg_de.js"></script>
+</head>
+<body>
+  <header id="bar">
+    <button id="menu" class="icon" title="Seitenleiste">&#9776;</button>
+    <select id="picker" title="Automation wählen"><option value="">Lade …</option></select>
+    <button id="reload" title="Aus HA neu laden">Neu laden</button>
+    <button id="save" class="primary" disabled>Speichern</button>
+    <span id="status"></span>
+    <span class="spacer"></span>
+    <button id="toggleSide" title="JSON-Seitenleiste ein/aus">JSON</button>
+  </header>
+  <main>
+    <div id="ws"></div>
+    <aside id="side">
+      <div class="sideHead"><b id="sideTitle">Gesamte Automation</b></div>
+      <textarea id="json" spellcheck="false"></textarea>
+      <div class="sideFoot">
+        <button id="applyJson">JSON übernehmen</button>
+        <span class="hint">Ohne Auswahl: ganze Automation. Mit Auswahl: nur dieser Block.</span>
+      </div>
+    </aside>
+  </main>
+  <script src="ha_blocks.js"></script>
+  <script src="editor.js"></script>
+</body>
+</html>

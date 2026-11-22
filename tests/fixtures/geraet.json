@@ -1,0 +1,13 @@
+{
+  "id": "1700000000002",
+  "alias": "Lüfter bei Hitze",
+  "description": "",
+  "triggers": [
+    { "type": "temperature", "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "entity_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "domain": "sensor", "trigger": "device", "above": 30 }
+  ],
+  "conditions": [],
+  "actions": [
+    { "type": "turn_on", "device_id": "cccccccccccccccccccccccccccccccc", "entity_id": "dddddddddddddddddddddddddddddddd", "domain": "switch" }
+  ],
+  "mode": "single"
+}

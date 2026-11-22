@@ -1,0 +1,14 @@
+{
+  "domain": "blockly_automations",
+  "name": "Blockly Automations",
+  "codeowners": ["@ManagerLol4", "@Hobix0"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http", "panel_custom"],
+  "documentation": "https://github.com/ManagerLol4/ha-blockly-automations",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/ManagerLol4/ha-blockly-automations/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
