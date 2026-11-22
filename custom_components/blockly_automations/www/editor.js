@@ -9,9 +9,65 @@
   };
 
   HAB.defineBlocks(Blockly);
+
+  // ---------- Daten aus HA für Vorschlagslisten ----------
+  const loc = (key) => { try { return (S.hass.localize && S.hass.localize(key)) || ""; } catch (e) { return ""; } };
+  const fname = (st) => (st && st.attributes && st.attributes.friendly_name) || "";
   HAB.hooks.entityName = (eid) => {
-    const st = S.hass && typeof eid === "string" && S.hass.states[eid];
-    return st ? "· " + (st.attributes.friendly_name || "") : "";
+    const st = S.hass && typeof eid === "string" && S.hass.states[eid.split(",")[0].trim()];
+    return st ? "· " + fname(st) : "";
+  };
+  HAB.hooks.entities = (domains) => {
+    if (!S.hass) return [];
+    return Object.values(S.hass.states)
+      .filter((s) => !domains || !domains.length || domains.includes(s.entity_id.split(".")[0]))
+      .map((s) => [s.entity_id, fname(s)])
+      .sort((a, b) => (a[1] || a[0]).localeCompare(b[1] || b[0], "de"));
+  };
+  const DOMAIN_STATES = {
+    binary_sensor: ["on", "off"], switch: ["on", "off"], light: ["on", "off"], fan: ["on", "off"],
+    input_boolean: ["on", "off"], automation: ["on", "off"], script: ["on", "off"], remote: ["on", "off"],
+    person: ["home", "not_home"], device_tracker: ["home", "not_home"],
+    cover: ["open", "closed", "opening", "closing"], lock: ["locked", "unlocked", "jammed", "open"],
+    media_player: ["playing", "paused", "idle", "on", "off", "standby"],
+    vacuum: ["cleaning", "docked", "returning", "idle", "paused", "error"],
+    alarm_control_panel: ["disarmed", "armed_home", "armed_away", "armed_night", "triggered"],
+    sun: ["above_horizon", "below_horizon"], climate: ["heat", "cool", "auto", "off"],
+  };
+  HAB.hooks.states = (eid) => {
+    if (!S.hass) return [];
+    const st = S.hass.states[eid];
+    const dom = (eid || "").split(".")[0];
+    const out = new Set();
+    if (st) out.add(st.state);
+    for (const v of DOMAIN_STATES[dom] || []) out.add(v);
+    if (st && Array.isArray(st.attributes.options)) st.attributes.options.forEach((o) => out.add(String(o)));
+    if (st && Array.isArray(st.attributes.hvac_modes)) st.attributes.hvac_modes.forEach((o) => out.add(String(o)));
+    if (dom === "person" || dom === "device_tracker")
+      Object.values(S.hass.states).filter((s) => s.entity_id.startsWith("zone.") && s.entity_id !== "zone.home").forEach((z) => out.add(fname(z)));
+    out.add("unavailable"); out.add("unknown");
+    return [...out].map((s) => [s, loc(`component.${dom}.entity_component._.state.${s}`)]);
+  };
+  HAB.hooks.services = () => {
+    if (!S.hass) return [];
+    const out = [];
+    for (const [d, svcs] of Object.entries(S.hass.services))
+      for (const s of Object.keys(svcs)) out.push([`${d}.${s}`, loc(`component.${d}.services.${s}.name`)]);
+    return out.sort((a, b) => a[0].localeCompare(b[0]));
+  };
+  HAB.hooks.serviceFields = (svc) => {
+    if (!S.hass || typeof svc !== "string" || !svc.includes(".")) return null;
+    const [d, s] = svc.split(".");
+    const def = S.hass.services[d] && S.hass.services[d][s];
+    if (!def) return null;
+    const named = (fields) => {
+      const o = {};
+      for (const [k, f] of Object.entries(fields || {})) {
+        o[k] = f && f.fields ? { ...f, fields: named(f.fields) } : { ...f, name: loc(`component.${d}.services.${s}.fields.${k}.name`) || (f && f.name) || k };
+      }
+      return o;
+    };
+    return named(def.fields);
   };
 
   function status(text, cls = "") {
@@ -45,7 +101,7 @@
         })
       : Blockly.Themes.Classic;
     S.ws = Blockly.inject($("ws"), {
-      toolbox: HAB.TOOLBOX,
+      toolbox: HAB.buildToolbox(),
       media: "vendor/media/",
       renderer: "zelos",
       theme,
@@ -58,6 +114,13 @@
     S.ws.addChangeListener((e) => {
       if (e.type === Blockly.Events.SELECTED) updateSide();
       if (!e.isUiEvent && !S.busy) { updateStatus(); updateSide(); }
+      // Dienst gewechselt: Block mit den Feldern des neuen Dienstes neu aufbauen.
+      if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "field" && !S.busy) {
+        const b = S.ws.getBlockById(e.blockId);
+        if (b && b.serviceField_ === e.name && HAB.hooks.serviceFields(e.newValue)) {
+          setTimeout(() => { if (!b.isDisposed()) replaceBlock(b, HAB.blockToItem(b)); }, 0);
+        }
+      }
     });
   }
 
@@ -93,11 +156,12 @@
       $("save").disabled = true;
       return;
     }
-    const changed = !HAB.deepEqual(currentConfig(), S.original);
+    const changed = S.isNew || !HAB.deepEqual(currentConfig(), S.original);
     const loose = looseCount();
     $("save").disabled = false;
     $("save").classList.toggle("primary", changed);
-    let txt = changed ? "● Geändert – noch nicht gespeichert" : "Keine Änderungen";
+    let txt = S.isNew ? "✚ Neue Automation – noch nicht in HA gespeichert"
+      : changed ? "● Geändert – noch nicht gespeichert" : "Keine Änderungen";
     if (loose) txt += ` · ${loose} lose Blöcke werden nicht gespeichert`;
     status(txt, changed || loose ? "warn" : "");
   }
@@ -124,6 +188,11 @@
       updateStatus(); updateSide();
       return;
     }
+    replaceBlock(b, item);
+  }
+
+  // Ersetzt einen Block (samt Kindern) durch einen neu aufgebauten aus item.
+  function replaceBlock(b, item) {
     let kind = b.type.slice(3);
     if (kind === "action" && HAB.isObj(item) && "condition" in item) kind = "condition";
     if (kind === "condition" && b.previousConnection && b.previousConnection.targetConnection &&
@@ -132,15 +201,21 @@
       if (chk.includes("ha_action")) kind = "action";
     }
     const prev = b.previousConnection && b.previousConnection.targetConnection;
+    const next = b.getNextBlock();
     const xy = b.getRelativeToSurfaceXY();
     Blockly.Events.setGroup(true);
-    b.unplug(true);
-    b.dispose(false);
-    const nb = Blockly.serialization.blocks.append(HAB.itemToBlockJson(kind, item), S.ws);
-    if (prev && nb.previousConnection) prev.connect(nb.previousConnection);
-    else nb.moveBy(xy.x, xy.y);
-    Blockly.Events.setGroup(false);
-    nb.select();
+    try {
+      if (next) next.unplug(false);
+      b.unplug(false);
+      b.dispose(false);
+      const nb = Blockly.serialization.blocks.append(HAB.itemToBlockJson(kind, item), S.ws);
+      if (prev && nb.previousConnection) prev.connect(nb.previousConnection);
+      else nb.moveTo(xy);
+      if (next && nb.nextConnection) nb.nextConnection.connect(next.previousConnection);
+      nb.select();
+    } finally {
+      Blockly.Events.setGroup(false);
+    }
   }
 
   // ---------- Laden / Speichern ----------
@@ -150,21 +225,46 @@
       .map((s) => ({ id: String(s.attributes.id), name: s.attributes.friendly_name || s.entity_id }))
       .sort((a, b) => a.name.localeCompare(b.name, "de"));
   }
-  function fillPicker() {
+  function fillPicker(initial) {
     const sel = $("picker");
     const list = automationList();
+    S.pickerKey = list.map((a) => a.id + a.name).join("|");
     sel.innerHTML = "";
     sel.appendChild(new Option("– Automation wählen –", ""));
+    if (S.isNew) sel.appendChild(new Option("✚ (neu, ungespeichert)", "__new__"));
     for (const a of list) sel.appendChild(new Option(a.name, a.id));
-    const last = store("haBlockly.last");
-    if (last && list.some((a) => a.id === last)) { sel.value = last; load(last); }
+    if (initial) {
+      const last = store("haBlockly.last");
+      if (last && list.some((a) => a.id === last)) { sel.value = last; load(last); }
+    } else {
+      sel.value = S.isNew ? "__new__" : S.id || "";
+    }
+  }
+
+  function newAutomation() {
+    if (!confirmDiscard()) return;
+    const cfg = HAB.NEW_AUTOMATION();
+    S.id = String(Date.now());
+    S.isNew = true;
+    S.lossless = true;
+    S.original = cfg;
+    S.busy = true;
+    loadIntoWorkspace(S.ws, cfg);
+    S.busy = false;
+    fillPicker(false);
+    const r = rootBlock();
+    if (r) { S.ws.scrollBoundsIntoView(r.getBoundingRectangleWithoutChildren()); r.select(); }
+    updateStatus(); updateSide();
   }
 
   async function load(id) {
-    if (!id) return;
+    if (!id || id === "__new__") return;
     status("Lade …");
     try {
       const cfg = await api("GET", id);
+      S.isNew = false;
+      fillPicker(false);
+      $("picker").value = id;
       S.id = id;
       S.original = cfg;
       S.busy = true;
@@ -188,13 +288,19 @@
     Blockly.hideChaff();
     await new Promise((r) => setTimeout(r, 30));
     const cfg = currentConfig();
-    if (HAB.deepEqual(cfg, S.original)) { updateStatus(); return; }
+    if (!S.isNew && HAB.deepEqual(cfg, S.original)) { updateStatus(); return; }
+    if (looseCount() && !confirm(`${looseCount()} Blöcke hängen nicht an der Automation und werden nicht gespeichert. Trotzdem speichern?`)) return;
     $("save").disabled = true;
     status("Speichere …");
     try {
       await api("POST", S.id, cfg);
       const back = await api("GET", S.id);
       S.original = back;
+      if (S.isNew) {
+        S.isNew = false;
+        store("haBlockly.last", S.id);
+        fillPicker(false);
+      }
       $("save").classList.remove("primary");
       if (HAB.deepEqual(back, cfg)) status("✓ In Home Assistant gespeichert", "ok");
       else { status("Gespeichert – HA hat die Daten angepasst, neu geladen.", "warn"); await load(S.id); }
@@ -205,6 +311,7 @@
   }
 
   function confirmDiscard() {
+    if (S.isNew && S.ws && !HAB.deepEqual(currentConfig(), S.original)) return confirm("Neue, ungespeicherte Automation verwerfen?");
     if (!S.original || !S.lossless) return true;
     if (HAB.deepEqual(currentConfig(), S.original)) return true;
     return confirm("Ungespeicherte Änderungen verwerfen?");
@@ -234,8 +341,12 @@
       S.hass = hass;
       if (first) {
         initWorkspace();
-        fillPicker();
+        fillPicker(true);
+        return;
       }
+      // Neue/umbenannte Automationen in der Auswahl nachziehen.
+      const key = automationList().map((a) => a.id + a.name).join("|");
+      if (key !== S.pickerKey) fillPicker(false);
     },
     selfTest,
     currentConfig: () => currentConfig(),
@@ -246,7 +357,8 @@
     if (!confirmDiscard()) { e.target.value = S.id || ""; return; }
     load(e.target.value);
   });
-  $("reload").addEventListener("click", () => { if (S.id && confirmDiscard()) load(S.id); });
+  $("reload").addEventListener("click", () => { if (S.id && !S.isNew && confirmDiscard()) load(S.id); });
+  $("new").addEventListener("click", newAutomation);
   // Speichern ist nie per disabled blockiert, solange ein Feld-Editor offen ist:
   // pointerdown schließt ihn vor dem Klick.
   $("bar").addEventListener("pointerdown", () => { Blockly.hideChaff(); setTimeout(updateStatus, 0); });

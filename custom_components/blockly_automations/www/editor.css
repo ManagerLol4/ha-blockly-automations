@@ -33,6 +33,8 @@ main { flex: 1; display: flex; min-height: 0; }
 #json { flex: 1; resize: none; border: 0; border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line); padding: 8px 10px; background: var(--input);
   color: var(--fg); font: 12px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre; }
+.blocklyText.ha-entity-name { fill-opacity: .75; font-style: italic; }
+.blocklyText.ha-summary { fill-opacity: .85; font-family: Consolas, monospace; }
 @media (max-width: 800px) {
   #side { position: absolute; right: 0; top: 52px; bottom: 0; width: 100%; z-index: 50; }
 }
