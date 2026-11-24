@@ -5,6 +5,9 @@ statischen Frontend-Dateien aus. Gespeichert wird ausschließlich über die
 normale HA-Schnittstelle config/automation/config/<id>; es gibt kein eigenes
 Speicherformat.
 
+Darstellung (eingeklappte Bausteine) liegt getrennt davon in
+.storage/blockly_automations.layout – die Automation selbst bleibt unberührt.
+
 Updates: Frontend-Dateien werden über www/version.json ohne Neustart neu
 geladen. Ändern sich Python-Dateien, legt die Integration eine Reparatur-
 Meldung „Neustart erforderlich“ an (kein automatischer Neustart).
@@ -17,12 +20,15 @@ import hashlib
 import json
 from pathlib import Path
 
-from homeassistant.components import frontend, panel_custom
+import voluptuous as vol
+
+from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, PANEL_ICON, PANEL_TITLE, PANEL_URL, STATIC_URL
 
@@ -30,6 +36,9 @@ BASE_DIR = Path(__file__).parent
 WWW_DIR = BASE_DIR / "www"
 RESTART_ISSUE = "restart_required"
 CHECK_INTERVAL = timedelta(minutes=5)
+LAYOUT_STORE_KEY = f"{DOMAIN}.layout"
+LAYOUT_STORE_VERSION = 1
+LAYOUT_MAX_KEYS = 2000
 
 
 def _version() -> str:
@@ -54,10 +63,52 @@ def _code_hash() -> str:
     return digest.hexdigest()
 
 
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/layout/get", vol.Required("key"): str}
+)
+@websocket_api.require_admin
+@callback
+def _ws_layout_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Darstellung einer Automation/eines Skripts lesen (oder None)."""
+    layouts = hass.data[DOMAIN]["layouts"]
+    connection.send_result(msg["id"], layouts.get(msg["key"]))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/layout/set",
+        vol.Required("key"): vol.All(str, vol.Length(min=1, max=300)),
+        vol.Required("layout"): vol.Any(None, dict),
+    }
+)
+@websocket_api.require_admin
+@callback
+def _ws_layout_set(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Darstellung speichern; None löscht den Eintrag."""
+    data = hass.data[DOMAIN]
+    layouts: dict = data["layouts"]
+    if msg["layout"] is None:
+        layouts.pop(msg["key"], None)
+    elif msg["key"] in layouts or len(layouts) < LAYOUT_MAX_KEYS:
+        layouts[msg["key"]] = msg["layout"]
+    else:
+        connection.send_error(msg["id"], "too_many", "Zu viele gespeicherte Darstellungen")
+        return
+    data["layout_store"].async_delay_save(lambda: layouts, 2)
+    connection.send_result(msg["id"])
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Panel und statische Dateien registrieren."""
     data = hass.data.setdefault(DOMAIN, {})
     version = await hass.async_add_executor_job(_version)
+
+    if "layout_store" not in data:
+        store: Store = Store(hass, LAYOUT_STORE_VERSION, LAYOUT_STORE_KEY)
+        data["layout_store"] = store
+        data["layouts"] = (await store.async_load()) or {}
+        websocket_api.async_register_command(hass, _ws_layout_get)
+        websocket_api.async_register_command(hass, _ws_layout_set)
 
     if not data.get("static_registered"):
         await hass.http.async_register_static_paths(

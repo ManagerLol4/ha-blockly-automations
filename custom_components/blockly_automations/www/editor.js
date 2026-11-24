@@ -8,7 +8,11 @@
   const S = {
     hass: null, ws: null, id: null, original: null, lossless: true, busy: false, isNew: false,
     cats: [], regCat: {}, pendingCat: null, listKey: "", search: "",
+    kind: "automation", catsBy: { automation: [], script: [] }, uid: {}, blueprints: {},
+    paths: null, hints: [], trace: null, runs: [], live: false, liveRes: {}, tplUnsubs: [], xref: null,
   };
+  // Was gerade bearbeitet wird: Automation (Block ha_root) oder Skript (Block ha_script).
+  const rootKind = (k = S.kind) => (k === "script" ? "script" : "root");
   const NO_CAT = "__none__";
 
   // ---------- Daten aus HA für Felder und Vorschläge ----------
@@ -141,6 +145,7 @@
   HAB.hooks.chipText = (c, v, raw) => {
     if (v === undefined || v === "") return "";
     switch (c.type) {
+      case "triggerid": return arr(v).join(", ");
       case "entity": return enames(v);
       case "target": return targetText(v) || "";
       case "state": return v === null ? "beliebig" : stateText(firstEntity(raw), v);
@@ -156,6 +161,11 @@
   function selectorFor(c, item) {
     if (c.sel) return c.sel;
     switch (c.type) {
+      case "triggerid": {
+        const cur = arr(c.path ? HAB.getPath(item, c.path) : undefined).map(String);
+        const options = [...new Set([...HAB.triggerIds(currentConfig()), ...cur])];
+        return { select: { multiple: true, custom_value: true, mode: "list", options } };
+      }
       case "state": { const e = firstEntity(item); return e ? { state: { entity_id: e } } : { text: {} }; }
       case "time": return { time: {} };
       case "duration": return { duration: {} };
@@ -177,6 +187,7 @@
     }
     if (c.type === "duration" && typeof cur === "number") return { seconds: cur };
     if (c.type === "weekdays") return arr(cur);
+    if (c.type === "triggerid") return arr(cur).map(String);
     if (Array.isArray(cur) && c.type !== "json") return cur.join(", ");
     return cur;
   }
@@ -190,6 +201,7 @@
       return clean;
     }
     if (c.type === "weekdays") return typeof cur === "string" && arr(v).length === 1 ? arr(v)[0] : arr(v);
+    if (c.type === "triggerid") { const a = arr(v); return !Array.isArray(cur) && a.length === 1 ? a[0] : a; }
     if (typeof v === "string" && (Array.isArray(cur) || (c.type === "list" && v.includes(",")))) return v.split(",").map((s) => s.trim()).filter(Boolean);
     if (typeof v === "string" && c.numeric && v.trim() !== "" && isFinite(Number(v))) return Number(v);
     return v;
@@ -346,6 +358,45 @@
   }
   HAB.hooks.addItem = (block, inputName, kind) => addFromHA(block, inputName, kind);
 
+  // Trigger-IDs der offenen Automation (für „Ausgelöst durch ID“).
+  HAB.hooks.triggerIds = () => { try { return HAB.triggerIds(currentConfig()); } catch (e) { return []; } };
+  HAB.hooks.scripts = () => (S.hass ? itemList("script").map((a) => [a.entity_id, a.name]) : []);
+  HAB.hooks.blueprintInputs = (path, kind) => {
+    const d = S.blueprints[kind === "script" ? "script" : "automation"] || {};
+    const bp = d[path];
+    return (bp && bp.metadata && bp.metadata.input) || null;
+  };
+
+  // Rechtsklick „Name / Kommentar“: setzt alias – steht dann im Baustein und im Ablauf-Protokoll.
+  HAB.hooks.renameBlock = (block) => {
+    if (!block || block.isDisposed() || block.isInFlyout) return;
+    const item = HAB.blockToItem(block);
+    if (!isObj(item)) return;
+    const cur = typeof item.alias === "string" ? item.alias : "";
+    const v = prompt("Name / Kommentar für diesen Schritt\n(erscheint im Baustein und im Ablauf-Protokoll von HA):", cur);
+    if (v === null || v.trim() === cur) return;
+    if (v.trim()) item.alias = v.trim(); else delete item.alias;
+    replaceBlock(block, item);
+  };
+
+  // Eingaben (fields) eines Skripts im HA-Objekt-Editor (YAML) bearbeiten.
+  HAB.hooks.editScriptFields = async () => {
+    const fn = parent.__haBlocklyPick;
+    const cfg = currentConfig();
+    if (!cfg) return;
+    if (!fn) { status("Das Auswahlfenster von Home Assistant ist nicht verfügbar – Eingaben im Expertenmodus (JSON) bearbeiten.", "warn"); return; }
+    const cur = isObj(cfg.fields) ? cfg.fields : {};
+    const res = await fn({ mode: "selector", title: "Eingaben des Skripts", value: cur, selector: { object: {} },
+      label: "Beispiel: raum: {name: Raum, selector: {area: {}}}" });
+    if (res === undefined || !res) return;
+    const v = res.value === "" || res.value === null ? {} : res.value;
+    if (!isObj(v)) { status("Die Eingaben müssen eine Liste von Namen mit Einstellungen sein (YAML-Objekt).", "warn"); return; }
+    if (HAB.deepEqual(v, cur)) return;
+    const next = HAB.clone(cfg);
+    next.fields = v;
+    reloadKeepingLayout(next);
+  };
+
   // Einfach- oder Expertenmodus (Experte: Eingabefelder, alle Bausteine, JSON).
   const isExpert = () => store("haBlockly.expert") === "1";
   HAB.hooks.simple = !isExpert();
@@ -360,9 +411,10 @@
   }
   const errText = (e) => (e && ((e.body && e.body.message) || e.message)) || String(e);
 
-  function api(method, id, body) {
-    return S.hass.callApi(method, `config/automation/config/${encodeURIComponent(id)}`, body);
+  function apiFor(kind, method, id, body) {
+    return S.hass.callApi(method, `config/${kind === "script" ? "script" : "automation"}/config/${encodeURIComponent(id)}`, body);
   }
+  const api = (method, id, body) => apiFor(S.kind, method, id, body);
 
   function store(key, val) {
     try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch (e) { return null; }
@@ -385,7 +437,7 @@
         })
       : Blockly.Themes.Classic;
     S.ws = Blockly.inject($("ws"), {
-      toolbox: HAB.buildToolbox(),
+      toolbox: HAB.buildToolbox(rootKind()),
       media: "vendor/media/",
       renderer: "zelos",
       theme,
@@ -395,12 +447,20 @@
       zoom: { controls: true, wheel: false, startScale: 0.8, maxScale: 2, minScale: 0.3 },
       move: { scrollbars: true, drag: true, wheel: true },
     });
-    const rootAdd = (i, kind) => () => { const r = rootBlock(); if (r) addFromHA(r, "L" + i, kind); };
+    // Bei Skripten gibt es nur eine Lücke (ABLAUF); Bedingungen sind dort Schritte.
+    const rootAdd = (i, kind) => () => {
+      const r = rootBlock();
+      if (!r) return;
+      if (S.kind === "script") { if (kind !== "trigger") addFromHA(r, "L0", kind); return; }
+      addFromHA(r, "L" + i, kind);
+    };
+    S.ws.registerButtonCallback("newScript", () => newScript());
     S.ws.registerButtonCallback("addTrigger", rootAdd(0, "trigger"));
     S.ws.registerButtonCallback("addCondition", rootAdd(1, "condition"));
     S.ws.registerButtonCallback("addAction", rootAdd(2, "action"));
     S.ws.addChangeListener((e) => {
-      if (e.type === Blockly.Events.SELECTED) updateSide();
+      if (e.type === Blockly.Events.SELECTED) { updateSide(); renderDetail(); }
+      if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "collapsed" && !S.busy) saveLayoutSoon();
       if (!e.isUiEvent && !S.busy) { updateStatus(); updateSide(); }
       // Dienst gewechselt: Block mit den Feldern des neuen Dienstes neu aufbauen.
       if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "field" && !S.busy) {
@@ -415,7 +475,7 @@
   }
 
   function rootBlock(ws = S.ws) {
-    return ws.getBlocksByType("ha_root", false)[0] || null;
+    return ws.getBlocksByType("ha_root", false)[0] || ws.getBlocksByType("ha_script", false)[0] || null;
   }
 
   function currentConfig(ws = S.ws) {
@@ -423,8 +483,8 @@
     return r ? HAB.blockToItem(r) : null;
   }
 
-  function loadIntoWorkspace(ws, cfg) {
-    const json = HAB.itemToBlockJson("root", cfg);
+  function loadIntoWorkspace(ws, cfg, kind = S.kind) {
+    const json = HAB.itemToBlockJson(rootKind(kind), cfg);
     json.x = 20; json.y = 20;
     Blockly.Events.disable();
     try {
@@ -442,7 +502,7 @@
 
   // ---------- Status ----------
   function looseCount() {
-    return S.ws.getTopBlocks(false).filter((b) => b.type !== "ha_root").length;
+    return S.ws.getTopBlocks(false).filter((b) => !HAB.ROOTS.has(b.haKind_)).length;
   }
   function updateTitle() {
     const c = S.ws && currentConfig();
@@ -465,20 +525,33 @@
       : changed ? "● Geändert – noch nicht gespeichert" : "Alles gespeichert";
     if (missing) txt += ` · ${missing}× fehlt noch eine Auswahl (⚠ am Baustein)`;
     if (loose) txt += ` · ${loose} Baustein(e) hängen nirgends dran`;
+    if (S.hints.length) txt += ` · 💡 ${S.hints.length} Hinweis(e)`;
     status(txt, changed || loose || missing ? "warn" : "");
+    applyOverlay();
+    renderHints();
   }
 
-  // Gelbes Warnzeichen an Bausteinen, bei denen noch etwas ausgewählt werden muss.
+  // Warnzeichen an Bausteinen: fehlende Auswahl (⚠) und Hinweise der Prüfregeln (💡).
   function markMissing() {
+    const r = rootBlock();
+    S.paths = r ? HAB.collectPaths(r) : new Map();
+    let hints = [];
+    try { hints = r ? HAB.lint(currentConfig(), rootKind()) : []; } catch (e) { hints = []; }
+    S.hints = hints;
+    const byPath = {};
+    for (const h of hints) (byPath[h.path] = byPath[h.path] || []).push(h.msg);
     let n = 0;
     for (const b of S.ws.getAllBlocks(false)) {
-      if (b.type === "ha_root" || b.isInFlyout) continue;
+      if (b.isInFlyout) continue;
       let msg = null;
-      try { msg = HAB.missingInfo(HAB.blockToItem(b)); } catch (e) { msg = null; }
+      if (!HAB.ROOTS.has(b.haKind_)) { try { msg = HAB.missingInfo(HAB.blockToItem(b)); } catch (e) { msg = null; } }
       if (msg) n++;
-      if ((b.__habWarn || null) !== msg) {
-        b.__habWarn = msg;
-        try { b.setWarningText(msg ? msg + " – zum Ändern anklicken" : null); } catch (e) { /* optional */ }
+      const attached = b.habPath_ !== undefined && S.paths.get(b.habPath_) === b;
+      const lintMsgs = attached ? byPath[b.habPath_] || [] : [];
+      const text = [msg ? msg + " – zum Ändern anklicken" : "", ...lintMsgs.map((m) => "💡 " + m)].filter(Boolean).join("\n\n") || null;
+      if ((b.__habWarn || null) !== text) {
+        b.__habWarn = text;
+        try { b.setWarningText(text); } catch (e) { /* optional */ }
       }
     }
     return n;
@@ -499,15 +572,16 @@
     if (!S.ws || $("side").classList.contains("hidden")) return;
     if (document.activeElement === $("json")) return;
     const b = selectedBlock();
-    const val = b && b.type !== "ha_root" ? HAB.blockToItem(b) : currentConfig();
-    $("sideTitle").textContent = b && b.type !== "ha_root" ? "Ausgewählter Block" : "Gesamte Automation";
+    const isRoot = !b || HAB.ROOTS.has(b.haKind_);
+    const val = !isRoot ? HAB.blockToItem(b) : currentConfig();
+    $("sideTitle").textContent = !isRoot ? "Ausgewählter Block" : S.kind === "script" ? "Gesamtes Skript" : "Gesamte Automation";
     $("json").value = val === null ? "" : JSON.stringify(val, null, 2);
   }
   function applyJson() {
     let item;
     try { item = JSON.parse($("json").value); } catch (e) { alert("Ungültiges JSON: " + e.message); return; }
     const b = selectedBlock();
-    if (!b || b.type === "ha_root") {
+    if (!b || HAB.ROOTS.has(b.haKind_)) {
       loadIntoWorkspace(S.ws, item);
       updateStatus(); updateSide();
       return;
@@ -527,6 +601,7 @@
     const prev = b.previousConnection && b.previousConnection.targetConnection;
     const next = b.getNextBlock();
     const xy = b.getRelativeToSurfaceXY();
+    const wasCollapsed = b.isCollapsed();
     Blockly.Events.setGroup(true);
     try {
       if (next) next.unplug(false);
@@ -536,6 +611,7 @@
       if (prev && nb.previousConnection) prev.connect(nb.previousConnection);
       else nb.moveTo(xy);
       if (next && nb.nextConnection) nb.nextConnection.connect(next.previousConnection);
+      if (wasCollapsed) nb.setCollapsed(true);
       nb.select();
     } finally {
       Blockly.Events.setGroup(false);
@@ -543,25 +619,44 @@
   }
 
   // ---------- Automationen, Kategorien, Liste ----------
-  function automationList() {
+  // Automationen: ID steht im Attribut „id“. Skripte: ID = unique_id aus dem Register (sonst object_id).
+  function itemList(kind = S.kind) {
+    if (!S.hass) return [];
+    const pre = kind + ".";
     return Object.values(S.hass.states)
-      .filter((s) => s.entity_id.startsWith("automation.") && s.attributes.id)
-      .map((s) => ({ id: String(s.attributes.id), entity_id: s.entity_id, name: s.attributes.friendly_name || s.entity_id, on: s.state === "on" }))
+      .filter((s) => s.entity_id.startsWith(pre) && (kind !== "automation" || s.attributes.id))
+      .map((s) => ({
+        id: kind === "automation" ? String(s.attributes.id) : S.uid[s.entity_id] || s.entity_id.slice(pre.length),
+        entity_id: s.entity_id, name: s.attributes.friendly_name || s.entity_id, on: s.state === "on", kind,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name, "de"));
   }
-  const entityOf = (id) => { const a = automationList().find((x) => x.id === id); return a ? a.entity_id : null; };
+  const entityOf = (id, kind = S.kind) => { const a = itemList(kind).find((x) => x.id === id); return a ? a.entity_id : null; };
+  const lastKey = (kind = S.kind) => (kind === "script" ? "haBlockly.last.script" : "haBlockly.last");
 
   async function refreshMeta() {
     try {
-      const cats = await S.hass.callWS({ type: "config/category_registry/list", scope: "automation" });
-      S.cats = cats.sort((a, b) => a.name.localeCompare(b.name, "de"));
-      const ids = automationList().map((a) => a.entity_id);
+      const byName = (l) => (Array.isArray(l) ? l : []).sort((a, b) => a.name.localeCompare(b.name, "de"));
+      const [ca, cs] = await Promise.all(["automation", "script"].map((scope) =>
+        S.hass.callWS({ type: "config/category_registry/list", scope }).catch(() => [])));
+      S.catsBy = { automation: byName(ca), script: byName(cs) };
+      const ids = Object.keys(S.hass.states).filter((e) => e.startsWith("automation.") || e.startsWith("script."));
       const entries = ids.length ? await S.hass.callWS({ type: "config/entity_registry/get_entries", entity_ids: ids }) : {};
       S.regCat = {};
-      for (const [eid, e] of Object.entries(entries || {})) S.regCat[eid] = (e && e.categories && e.categories.automation) || null;
+      S.uid = {};
+      for (const [eid, e] of Object.entries(entries || {})) {
+        const dom = eid.split(".")[0];
+        S.regCat[eid] = (e && e.categories && e.categories[dom]) || null;
+        if (dom === "script" && e && e.unique_id) S.uid[eid] = String(e.unique_id);
+      }
     } catch (e) {
       console.warn("[Blockly Automations] Kategorien nicht lesbar", e);
     }
+    for (const domain of ["automation", "script"]) {
+      try { S.blueprints[domain] = (await S.hass.callWS({ type: "blueprint/list", domain })) || {}; } catch (e) { S.blueprints[domain] = {}; }
+    }
+    S.cats = S.catsBy[S.kind] || [];
+    if (S.ws) S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
     S.listKey = "";
     renderList();
     renderCategorySelect();
@@ -587,7 +682,7 @@
     const name = (prompt("Name der neuen Kategorie:") || "").trim();
     if (!name) return null;
     try {
-      const c = await S.hass.callWS({ type: "config/category_registry/create", scope: "automation", name });
+      const c = await S.hass.callWS({ type: "config/category_registry/create", scope: S.kind, name });
       await refreshMeta();
       return c.category_id;
     } catch (e) {
@@ -598,7 +693,7 @@
 
   async function setCategory(entityId, catId) {
     try {
-      await S.hass.callWS({ type: "config/entity_registry/update", entity_id: entityId, categories: { automation: catId || null } });
+      await S.hass.callWS({ type: "config/entity_registry/update", entity_id: entityId, categories: { [entityId.split(".")[0]]: catId || null } });
       S.regCat[entityId] = catId || null;
       S.listKey = "";
       renderList();
@@ -614,8 +709,9 @@
 
   function renderList() {
     if (!S.hass) return;
-    const autos = automationList();
-    const key = JSON.stringify([autos, S.regCat, S.cats, S.search, S.id, S.isNew]);
+    const autos = itemList();
+    S.cats = S.catsBy[S.kind] || [];
+    const key = JSON.stringify([S.kind, autos, S.regCat, S.cats, S.search, S.id, S.isNew]);
     if (key === S.listKey) return;
     S.listKey = key;
     const q = S.search.toLowerCase();
@@ -659,15 +755,25 @@
         it.className = "item" + (a.id === S.id && !S.isNew ? " sel" : "") + (a.on ? "" : " off");
         it.draggable = true;
         it.title = a.entity_id;
-        it.innerHTML = `<span class="name"></span><label class="switch" title="Automation ein/aus"><input type="checkbox"${a.on ? " checked" : ""}><span></span></label>`;
+        it.innerHTML = S.kind === "script"
+          ? `<span class="name"></span>${a.on ? '<span class="running" title="läuft gerade">●</span>' : ""}<button class="run icon" title="Skript jetzt ausführen">▶</button>`
+          : `<span class="name"></span><label class="switch" title="Automation ein/aus"><input type="checkbox"${a.on ? " checked" : ""}><span></span></label>`;
         it.querySelector(".name").textContent = a.name;
+        if (S.kind === "script") it.classList.remove("off");
         it.addEventListener("click", (e) => {
-          if (e.target.closest(".switch")) return;
+          if (e.target.closest(".switch") || e.target.closest(".run")) return;
           if (a.id !== S.id || S.isNew) { if (confirmDiscard()) load(a.id); }
           if (window.innerWidth < 800) $("list").classList.add("hidden");
         });
-        it.querySelector("input").addEventListener("change", (e) => {
+        const sw = it.querySelector("input");
+        if (sw) sw.addEventListener("change", (e) => {
           S.hass.callService("automation", e.target.checked ? "turn_on" : "turn_off", { entity_id: a.entity_id });
+        });
+        const run = it.querySelector(".run");
+        if (run) run.addEventListener("click", () => {
+          Promise.resolve(S.hass.callService("script", "turn_on", { entity_id: a.entity_id }))
+            .then(() => status(`▶ ${a.name} gestartet`, "ok"))
+            .catch((err) => status("Skript nicht gestartet: " + errText(err), "warn"));
         });
         it.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", a.entity_id); it.classList.add("dragging"); });
         it.addEventListener("dragend", () => it.classList.remove("dragging"));
@@ -686,10 +792,15 @@
 
   // ---------- Laden / Speichern ----------
   function newAutomation(factory = HAB.NEW_AUTOMATION) {
-    if (!confirmDiscard()) return;
+    if (S.kind !== "automation") { if (!switchKind("automation", false)) return; }
+    else if (!confirmDiscard()) return;
+    newItem(factory, String(Date.now()));
+  }
+  function newItem(factory, id) {
     const cfg = factory();
     S.pendingCat = catOfCurrent();
-    S.id = String(Date.now());
+    clearTrace();
+    S.id = id;
     S.isNew = true;
     S.lossless = true;
     S.original = cfg;
@@ -719,12 +830,16 @@
       S.busy = false;
       S.lossless = HAB.deepEqual(currentConfig(), cfg);
       if (!S.lossless) console.warn("[Blockly Automations] Rundlauf nicht identisch", { original: cfg, blocks: currentConfig() });
-      store("haBlockly.last", id);
+      store(lastKey(), id);
+      clearTrace();
+      await applyLayout();
       showRoot();
       S.listKey = "";
       renderList();
       renderCategorySelect();
       updateStatus(); updateSide();
+      if (inspOpen()) loadRuns();
+      renderDetail();
     } catch (e) {
       S.busy = false;
       status("Fehler beim Laden: " + errText(e), "warn");
@@ -757,9 +872,10 @@
       await api("POST", S.id, cfg);
       const back = await api("GET", S.id);
       S.original = back;
+      S.xref = null;
       if (S.isNew) {
         S.isNew = false;
-        store("haBlockly.last", S.id);
+        store(lastKey(), S.id);
         const eid = await waitForEntity(S.id);
         if (eid && S.pendingCat) await setCategory(eid, S.pendingCat);
         S.pendingCat = null;
@@ -767,6 +883,7 @@
       }
       $("save").classList.remove("primary");
       $("save").disabled = false;
+      saveLayout();
       if (HAB.deepEqual(back, cfg)) status("✓ In Home Assistant gespeichert", "ok");
       else { status("Gespeichert – HA hat die Daten angepasst, neu geladen.", "warn"); await load(S.id); }
     } catch (e) {
@@ -784,21 +901,498 @@
   }
 
   // Prüft alle Automationen: laden -> Blöcke -> zurück, muss identisch sein.
-  async function selfTest() {
+  async function selfTest(kind = S.kind, onProgress) {
     const ws = new Blockly.Workspace();
     const res = [];
-    for (const a of automationList()) {
+    const list = itemList(kind);
+    for (const a of list) {
       try {
-        const cfg = await api("GET", a.id);
-        loadIntoWorkspace(ws, cfg);
-        res.push({ name: a.name, ok: HAB.deepEqual(currentConfig(ws), cfg) });
+        const cfg = await apiFor(kind, "GET", a.id);
+        loadIntoWorkspace(ws, cfg, kind);
+        res.push({ id: a.id, name: a.name, ok: HAB.deepEqual(currentConfig(ws), cfg) });
       } catch (e) {
-        res.push({ name: a.name, ok: false, error: errText(e) });
+        res.push({ id: a.id, name: a.name, ok: false, error: errText(e) });
       }
+      if (onProgress) onProgress(res.length, list.length);
     }
     ws.dispose();
     return { total: res.length, ok: res.filter((r) => r.ok).length, failed: res.filter((r) => !r.ok) };
   }
+
+  // ---------- Automationen / Skripte umschalten ----------
+  const metaCount = () => itemList("automation").length * 100000 + itemList("script").length;
+  function renderTabs() {
+    for (const [k, id] of [["automation", "tabAuto"], ["script", "tabScript"]]) $(id).classList.toggle("sel", S.kind === k);
+    $("search").placeholder = S.kind === "script" ? "Skript suchen …" : "Automation suchen …";
+  }
+  function switchKind(kind, autoload = true) {
+    if (kind === S.kind) return true;
+    if (!confirmDiscard()) return false;
+    S.kind = kind;
+    store("haBlockly.kind", kind);
+    clearTrace();
+    S.id = null; S.original = null; S.isNew = false; S.pendingCat = null;
+    S.busy = true;
+    Blockly.Events.disable();
+    try { S.ws.clear(); } finally { Blockly.Events.enable(); S.busy = false; }
+    S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
+    renderTabs();
+    S.listKey = "";
+    renderList();
+    renderCategorySelect();
+    updateTitle();
+    updateStatus();
+    renderInsp();
+    renderDetail();
+    if (autoload) {
+      const last = store(lastKey());
+      if (last && itemList().some((a) => a.id === last)) load(last);
+    }
+    return true;
+  }
+  const slugify = (name) => name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "skript";
+  function newScript() {
+    const name = (prompt("Name des neuen Skripts (Funktion):", "Neues Skript") || "").trim();
+    if (!name) return;
+    if (S.kind !== "script") { if (!switchKind("script", false)) return; }
+    else if (!confirmDiscard()) return;
+    const base = slugify(name);
+    const taken = new Set(itemList("script").map((a) => a.id));
+    let id = base;
+    for (let i = 2; taken.has(id) || S.hass.states["script." + id]; i++) id = `${base}_${i}`;
+    newItem(() => HAB.NEW_SCRIPT(name), id);
+    status(`✚ Neues Skript „${name}“ (script.${id}) – nach dem Speichern als Baustein unter „Skripte“ nutzbar`, "ok");
+  }
+
+  // ---------- Darstellung (eingeklappte Bausteine) – getrennt von der HA-Konfiguration ----------
+  const layoutKey = () => `${S.kind}:${S.id}`;
+  const collapsedPaths = () => {
+    const r = rootBlock();
+    if (!r) return [];
+    return [...HAB.collectPaths(r)].filter(([p, b]) => p && b.isCollapsed()).map(([p]) => p);
+  };
+  function collapseAll(paths) {
+    const r = rootBlock();
+    if (!r || !paths || !paths.length) return;
+    const map = HAB.collectPaths(r);
+    S.busy = true;
+    Blockly.Events.disable();
+    try { for (const p of paths) { const b = map.get(p); if (b && p) b.setCollapsed(true); } } finally { Blockly.Events.enable(); S.busy = false; }
+  }
+  async function applyLayout() {
+    if (!S.id || S.isNew) return;
+    const id = S.id, kind = S.kind;
+    let lay = null;
+    try { lay = await S.hass.callWS({ type: "blockly_automations/layout/get", key: layoutKey() }); } catch (e) { return; }
+    if (!lay || id !== S.id || kind !== S.kind) return;
+    collapseAll(lay.collapsed);
+  }
+  function saveLayoutSoon() { clearTimeout(S.layoutT); S.layoutT = setTimeout(saveLayout, 800); }
+  async function saveLayout() {
+    if (!S.id || S.isNew || !rootBlock()) return;
+    const collapsed = collapsedPaths();
+    try {
+      await S.hass.callWS({ type: "blockly_automations/layout/set", key: layoutKey(), layout: collapsed.length ? { collapsed } : null });
+    } catch (e) {
+      if (!S.layoutWarned) { S.layoutWarned = true; console.warn("[Blockly Automations] Darstellung nicht gespeichert (HA-Neustart nach Update nötig?)", e); }
+    }
+  }
+  // Neu aufbauen, ohne dass eingeklappte Bausteine wieder aufgehen.
+  function reloadKeepingLayout(cfg) {
+    const keep = collapsedPaths();
+    S.busy = true;
+    loadIntoWorkspace(S.ws, cfg);
+    S.busy = false;
+    collapseAll(keep);
+    updateStatus(); updateSide(); renderDetail();
+  }
+
+  // ---------- Markierungen im Arbeitsbereich (Trace und Live) ----------
+  const OVERLAY = ["hab-run", "hab-skip", "hab-false", "hab-err", "hab-ltrue", "hab-lfalse"];
+  function setCls(b, cls) {
+    const g = b.getSvgRoot && b.getSvgRoot();
+    if (!g) return;
+    for (const c of OVERLAY) g.classList.toggle(c, cls.includes(c));
+  }
+  function stepClass(steps) {
+    if (!steps || !steps.length) return "hab-skip";
+    if (steps.some((x) => x && x.error)) return "hab-err";
+    const last = steps[steps.length - 1];
+    if (last && isObj(last.result) && last.result.result === false) return "hab-false";
+    return "hab-run";
+  }
+  function applyOverlay() {
+    if (!S.ws || !S.paths) return;
+    const steps = S.trace && S.trace.steps;
+    // Elemente ohne eigenen Trace-Eintrag (z. B. Optionen einer Auswahl) gelten als
+    // ausgeführt, wenn darunter etwas lief.
+    const keys = steps ? Object.keys(steps) : [];
+    for (const [p, b] of S.paths) {
+      if (!p || b.isDisposed()) continue;
+      const cls = [];
+      if (steps) cls.push(!steps[p] && keys.some((k) => k.startsWith(p + "/")) ? "hab-run" : stepClass(steps[p]));
+      const lv = S.live ? S.liveRes[p] : undefined;
+      if (lv === true) cls.push("hab-ltrue");
+      else if (lv === false) cls.push("hab-lfalse");
+      setCls(b, cls);
+    }
+  }
+  function focusPath(path) {
+    const map = rootBlock() ? HAB.collectPaths(rootBlock()) : null;
+    const b = map && map.get(path);
+    if (!b) return false;
+    for (let p = b; p; p = p.getParent()) if (p !== b && p.isCollapsed()) p.setCollapsed(false);
+    b.select();
+    try { S.ws.centerOnBlock(b.id); } catch (e) { /* optional */ }
+    return true;
+  }
+
+  // ---------- Inspektor: Abläufe (Traces), Live-Werte, Hinweise, Details ----------
+  const inspOpen = () => !$("insp").classList.contains("hidden");
+  const esc = (t) => String(t === undefined ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const fmtTime = (ts) => { try { return new Date(ts).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "medium" }); } catch (e) { return String(ts || ""); } };
+  const EXEC = {
+    finished: "✓ fertig", running: "▶ läuft", failed_conditions: "✗ Bedingung nicht erfüllt", failed_single: "✗ lief schon (single)",
+    failed_max_runs: "✗ zu viele Läufe", error: "⚠ Fehler", aborted: "⛔ abgebrochen", cancelled: "⛔ abgebrochen", timeout: "⏱ Zeitüberschreitung",
+  };
+  const runLabel = (r) => `${fmtTime(r.timestamp && r.timestamp.start)} · ${EXEC[r.script_execution] || r.script_execution || r.state || ""}`;
+  function clearTrace() {
+    S.trace = null; S.runs = []; S.runsErr = null;
+    if (S.paths) applyOverlay();
+  }
+  async function loadRuns() {
+    S.runs = []; S.runsErr = null;
+    if (!S.id || S.isNew) { renderInsp(); return; }
+    const id = S.id;
+    try {
+      const list = await S.hass.callWS({ type: "trace/list", domain: S.kind, item_id: S.id });
+      if (id !== S.id) return;
+      S.runs = (Array.isArray(list) ? list : []).sort((a, b) =>
+        String((b.timestamp && b.timestamp.start) || "").localeCompare(String((a.timestamp && a.timestamp.start) || "")));
+    } catch (e) { S.runsErr = errText(e); }
+    renderInsp();
+  }
+  async function showRun(runId) {
+    if (!runId) { S.trace = null; applyOverlay(); renderInsp(); renderDetail(); return; }
+    try {
+      const t = await S.hass.callWS({ type: "trace/get", domain: S.kind, item_id: S.id, run_id: runId });
+      const cur = currentConfig();
+      const cfgNoId = (c) => { if (!isObj(c)) return c; const o = HAB.clone(c); delete o.id; return o; };
+      S.trace = { runId, run: t, steps: (t && t.trace) || {}, mismatch: !!(t && t.config && !HAB.deepEqual(cfgNoId(t.config), cfgNoId(cur))) };
+    } catch (e) {
+      S.trace = null;
+      status("Ablauf nicht lesbar: " + errText(e), "warn");
+    }
+    applyOverlay(); renderInsp(); renderDetail();
+  }
+  function renderInsp() {
+    if (!inspOpen()) return;
+    const sel = $("runs");
+    sel.innerHTML = "";
+    sel.appendChild(new Option(S.runs.length ? "– keine Markierung –" : !S.id ? "– nichts geöffnet –" : S.isNew ? "– erst speichern –" : "– noch kein Ablauf –", ""));
+    for (const r of S.runs) sel.appendChild(new Option(runLabel(r), r.run_id));
+    sel.value = (S.trace && S.trace.runId) || "";
+    const info = $("runInfo");
+    if (S.runsErr) info.textContent = "Abläufe nicht lesbar: " + S.runsErr;
+    else if (S.trace && S.trace.run) {
+      const r = S.trace.run;
+      const parts = [];
+      if (r.trigger) parts.push(`Auslöser: ${r.trigger}`);
+      if (r.script_execution) parts.push(EXEC[r.script_execution] || r.script_execution);
+      if (r.error) parts.push(`Fehler: ${r.error}`);
+      if (S.trace.mismatch) parts.push("⚠ Die Konfiguration wurde seit diesem Ablauf geändert – Markierungen können verrutscht sein.");
+      info.innerHTML = parts.map((x) => `<div>${esc(x)}</div>`).join("") +
+        '<div class="legend"><span class="lg run">ausgeführt</span><span class="lg false">Bedingung falsch</span><span class="lg err">Fehler</span><span class="lg skip">nicht erreicht</span></div>';
+    } else info.textContent = S.runs.length ? `${S.runs.length} gespeicherte Abläufe – einen wählen, um ihn im Baustein-Bild zu sehen.` : "";
+    renderHints();
+  }
+  function renderHints() {
+    const box = $("hints");
+    if (!box || !inspOpen()) return;
+    box.innerHTML = "";
+    if (!S.hints.length) { box.innerHTML = '<div class="hint">Keine Hinweise 👍</div>'; return; }
+    for (const h of S.hints) {
+      const d = document.createElement("div");
+      d.className = "hintItem " + h.level;
+      d.textContent = (h.level === "warn" ? "⚠ " : "💡 ") + h.msg;
+      d.title = h.path ? "Zum Baustein springen" : "";
+      d.addEventListener("click", () => { if (h.path) focusPath(h.path); });
+      box.appendChild(d);
+    }
+  }
+
+  // Details zum ausgewählten Baustein: Ablauf-Schritte, Live-Zustände, Template-Vorschau.
+  function stopTemplates() {
+    for (const p of S.tplUnsubs) Promise.resolve(p).then((f) => typeof f === "function" && f()).catch(() => {});
+    S.tplUnsubs = [];
+  }
+  function ownTemplates(item, kind) {
+    const out = [];
+    if (typeof item === "string") return item.includes("{") ? [item] : out;
+    if (!isObj(item)) return out;
+    const lists = HAB.specFor(kind, item).lists.map((l) => l.path.split(".")[0]);
+    const scan = (v) => {
+      if (typeof v === "string") { if (/\{\{|\{%/.test(v) && !out.includes(v)) out.push(v); }
+      else if (Array.isArray(v)) v.forEach(scan);
+      else if (isObj(v)) Object.values(v).forEach(scan);
+    };
+    for (const [k, v] of Object.entries(item)) if (!lists.includes(k)) scan(v);
+    return out.slice(0, 4);
+  }
+  const shortJson = (v, n = 600) => { let t; try { t = typeof v === "string" ? v : JSON.stringify(v, null, 2); } catch (e) { t = String(v); } return t && t.length > n ? t.slice(0, n - 1) + "…" : t; };
+  function renderDetail() {
+    if (!inspOpen()) return;
+    stopTemplates();
+    const box = $("detail");
+    const sel = selectedBlock();
+    const b = (sel && !sel.isDisposed() ? sel : null) || rootBlock();
+    if (!b) { box.innerHTML = '<div class="hint">Nichts geöffnet.</div>'; $("detailLive").innerHTML = ""; return; }
+    if (S.paths && !S.paths.has(b.habPath_)) markMissing();
+    const path = b.habPath_ || "";
+    const isRoot = HAB.ROOTS.has(b.haKind_);
+    const html = [];
+    html.push(`<div class="dTitle">${esc(String((b.spec_ && b.spec_.title) || ""))}</div>`);
+    if (path) html.push(`<div class="hint">Pfad: <code>${esc(path)}</code></div>`);
+    if (S.trace && !isRoot) {
+      const steps = S.trace.steps[path];
+      if (!steps) html.push('<div class="hint">Im gewählten Ablauf nicht erreicht.</div>');
+      else steps.slice(0, 10).forEach((st, i) => {
+        html.push(`<div class="step"><b>${steps.length > 1 ? `${i + 1}. ` : ""}${esc(fmtTime(st.timestamp))}</b>`);
+        if (st.error) html.push(`<div class="err">Fehler: ${esc(st.error)}</div>`);
+        if (st.result !== undefined) html.push(`<div>Ergebnis:</div><pre>${esc(shortJson(st.result))}</pre>`);
+        if (st.changed_variables && Object.keys(st.changed_variables).length) html.push(`<div>Variablen:</div><pre>${esc(shortJson(st.changed_variables))}</pre>`);
+        html.push("</div>");
+      });
+    } else if (S.trace && isRoot && S.trace.run) {
+      const tk = Object.keys(S.trace.steps).find((k) => k.startsWith("trigger/"));
+      const st = tk && Array.isArray(S.trace.steps[tk]) ? S.trace.steps[tk][0] || {} : null;
+      if (st) html.push(`<div class="hint">Auslöser-Daten:</div><pre>${esc(shortJson(st.changed_variables || st))}</pre>`);
+    }
+    box.innerHTML = html.join("");
+    // Template-Vorschau (live, über render_template)
+    let item = null;
+    try { item = HAB.blockToItem(b); } catch (e) { item = null; }
+    if (!isRoot && item !== null) {
+      for (const tpl of ownTemplates(item, b.haKind_)) {
+        const d = document.createElement("div");
+        d.className = "tpl";
+        d.innerHTML = `<div class="hint">Template:</div><pre>${esc(shortJson(tpl, 300))}</pre><div class="hint">Ergebnis jetzt:</div><pre class="tplRes">…</pre>`;
+        box.appendChild(d);
+        const out = d.querySelector(".tplRes");
+        try {
+          const p = S.hass.connection.subscribeMessage((msg) => {
+            if (msg && msg.error) { out.textContent = "⚠ " + msg.error; out.classList.add("err"); }
+            else if (msg && "result" in msg) { out.textContent = shortJson(msg.result, 400); out.classList.remove("err"); }
+          }, { type: "render_template", template: tpl, timeout: 3, strict: false, report_errors: true });
+          p.catch((e) => { out.textContent = "⚠ " + errText(e) + (/trigger/.test(tpl) ? " (nutzt Auslöser-Daten, die es nur während eines Ablaufs gibt)" : ""); out.classList.add("err"); });
+          S.tplUnsubs.push(p);
+        } catch (e) { out.textContent = "Vorschau nicht verfügbar"; }
+      }
+    }
+    renderDetailLive();
+  }
+  function renderDetailLive() {
+    const box = $("detailLive");
+    if (!box || !inspOpen()) return;
+    const sel = selectedBlock();
+    const b = (sel && !sel.isDisposed() ? sel : null) || rootBlock();
+    if (!b) { box.innerHTML = ""; return; }
+    let refs = [];
+    try {
+      const all = HAB.references(HAB.blockToItem(b), b.haKind_);
+      refs = HAB.ROOTS.has(b.haKind_) ? all : all.filter((r) => r.path === "");
+    } catch (e) { refs = []; }
+    const ents = [...new Set(refs.map((r) => r.entity))].slice(0, 30);
+    if (!ents.length) { box.innerHTML = ""; return; }
+    box.innerHTML = '<div class="hint">Zustände jetzt:</div>' + ents.map((e) => {
+      const st = S.hass.states[e];
+      let val = st ? st.state : "– existiert nicht –";
+      try { if (st && S.hass.formatEntityState) val = S.hass.formatEntityState(st); } catch (er) { /* Rohwert */ }
+      const since = st && st.last_changed ? ` <span class="hint">seit ${esc(fmtTime(st.last_changed))}</span>` : "";
+      return `<div class="ent${st ? "" : " err"}"><span>${esc((st && st.attributes.friendly_name) || e)}</span><b>${esc(val)}</b>${since}</div>`;
+    }).join("");
+  }
+
+  // Live-Modus: Bedingungen jetzt prüfen (HA test_condition) und Zustände mitführen.
+  async function runLive() {
+    if (!S.live || !S.paths || S.liveBusy) return;
+    S.liveBusy = true;
+    const res = {};
+    let n = 0;
+    try {
+      for (const [p, b] of S.paths) {
+        if (!p || b.isDisposed() || b.haKind_ !== "condition" || !b.isEnabled() || n >= 60) continue;
+        let item;
+        try { item = HAB.blockToItem(b); } catch (e) { continue; }
+        // Bedingungen mit Auslöser-Daten lassen sich außerhalb eines Ablaufs nicht prüfen.
+        if (/"condition":"trigger"|trigger\./.test(JSON.stringify(item))) continue;
+        if (HAB.missingInfo(item)) continue;
+        n++;
+        try { const r = await S.hass.callWS({ type: "test_condition", condition: item }); res[p] = !!(r && r.result); } catch (e) { /* unbekannt */ }
+      }
+    } finally { S.liveBusy = false; }
+    S.liveRes = res;
+    applyOverlay();
+  }
+  function liveTick() {
+    if (!inspOpen()) return;
+    clearTimeout(S.liveDetailT);
+    S.liveDetailT = setTimeout(renderDetailLive, 700);
+  }
+  function setLive(on) {
+    S.live = on;
+    clearInterval(S.liveTimer);
+    S.liveRes = {};
+    if (on) { runLive(); S.liveTimer = setInterval(runLive, 5000); }
+    applyOverlay();
+  }
+
+  // ---------- Fenster (Querverweise, Selbsttest) ----------
+  function openModal(title) {
+    $("mTitle").textContent = title;
+    $("mStatus").textContent = "";
+    $("mBody").innerHTML = "";
+    $("modal").classList.remove("hidden");
+    return $("mBody");
+  }
+  const closeModal = () => $("modal").classList.add("hidden");
+  async function openItem(kind, id, path) {
+    closeModal();
+    if (kind !== S.kind) { if (!switchKind(kind, false)) return; }
+    else if (id !== S.id || S.isNew) { if (!confirmDiscard()) return; }
+    if (id !== S.id || S.isNew) await load(id);
+    if (path) setTimeout(() => focusPath(path), 50);
+  }
+
+  // Querverweise: wer löst auf eine Entität aus, wer prüft sie, wer schaltet sie, wer ruft ein Skript auf?
+  async function buildXref(force) {
+    if (S.xref && !force) return S.xref;
+    const all = [...itemList("automation"), ...itemList("script")];
+    const rows = [];
+    const queue = all.slice();
+    let done = 0;
+    const worker = async () => {
+      while (queue.length) {
+        const a = queue.shift();
+        try {
+          const cfg = await apiFor(a.kind, "GET", a.id);
+          for (const r of HAB.references(cfg, rootKind(a.kind))) rows.push({ ...r, kind: a.kind, id: a.id, name: a.name, self: a.entity_id });
+        } catch (e) { /* z. B. YAML-Paket ohne Bearbeitung */ }
+        done++;
+        $("mStatus").textContent = `lese ${done}/${all.length} …`;
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    $("mStatus").textContent = "";
+    S.xref = { rows, at: Date.now() };
+    return S.xref;
+  }
+  const ROLE = [["trigger", "Löst aus"], ["condition", "Prüft"], ["action", "Schaltet / nutzt"], ["call", "Ruft auf"], ["blueprint", "Blueprint nutzt"]];
+  async function showXref(force) {
+    const body = openModal("🔗 Querverweise");
+    body.innerHTML = '<div class="xhead"><input id="xq" type="search" placeholder="Entität oder Name filtern …" autocomplete="off">' +
+      '<label class="chk"><input type="checkbox" id="xmine"> nur was diese/s hier benutzt</label><button id="xreload">Neu einlesen</button></div><div id="xlist" class="hint">Lese alle Automationen und Skripte …</div>';
+    const mine = $("xmine");
+    mine.checked = !!(S.id && rootBlock());
+    mine.disabled = !rootBlock();
+    $("xreload").addEventListener("click", () => showXref(true));
+    const x = await buildXref(force);
+    const render = () => {
+      const q = $("xq").value.trim().toLowerCase();
+      let own = null;
+      if (mine.checked && rootBlock()) {
+        own = new Set(HAB.references(currentConfig(), rootKind()).map((r) => r.entity));
+        const selfId = S.id && entityOf(S.id);
+        if (selfId) own.add(selfId);
+      }
+      const byEnt = new Map();
+      for (const r of x.rows) {
+        if (own && !own.has(r.entity)) continue;
+        const st = S.hass.states[r.entity];
+        const nm = (st && st.attributes.friendly_name) || "";
+        if (q && !r.entity.includes(q) && !nm.toLowerCase().includes(q) && !r.name.toLowerCase().includes(q)) continue;
+        if (!byEnt.has(r.entity)) byEnt.set(r.entity, { nm, rows: [] });
+        byEnt.get(r.entity).rows.push(r);
+      }
+      const list = $("xlist");
+      list.className = "";
+      list.innerHTML = "";
+      const ents = [...byEnt.entries()].sort((a, b) => (a[1].nm || a[0]).localeCompare(b[1].nm || b[0], "de")).slice(0, 300);
+      if (!ents.length) { list.innerHTML = '<div class="hint">Keine Treffer.</div>'; return; }
+      for (const [ent, g] of ents) {
+        const card = document.createElement("div");
+        card.className = "xcard";
+        const st = S.hass.states[ent];
+        card.innerHTML = `<div class="xent"><b></b> <code></code> <span class="hint"></span></div>`;
+        card.querySelector("b").textContent = g.nm || ent;
+        card.querySelector("code").textContent = ent;
+        card.querySelector(".hint").textContent = st ? `= ${st.state}` : "(existiert nicht)";
+        for (const [role, label] of ROLE) {
+          const rs = g.rows.filter((r) => r.role === role);
+          if (!rs.length) continue;
+          const line = document.createElement("div");
+          line.className = "xrole";
+          line.innerHTML = `<span class="xr">${label}:</span>`;
+          const seen = new Set();
+          for (const r of rs) {
+            const key = r.kind + r.id;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const a = document.createElement("a");
+            a.href = "#";
+            a.textContent = (r.kind === "script" ? "📜 " : "🤖 ") + r.name;
+            a.title = r.path;
+            a.addEventListener("click", (e) => { e.preventDefault(); openItem(r.kind, r.id, r.path); });
+            line.appendChild(a);
+          }
+          card.appendChild(line);
+        }
+        list.appendChild(card);
+      }
+    };
+    $("xq").addEventListener("input", render);
+    mine.addEventListener("change", render);
+    render();
+  }
+
+  async function showSelfTest() {
+    const body = openModal(`🧪 Alle ${S.kind === "script" ? "Skripte" : "Automationen"} prüfen`);
+    body.innerHTML = '<div class="hint">Prüft, ob jede Konfiguration verlustfrei als Bausteine dargestellt werden kann (nur lesen, nichts wird gespeichert).</div><div id="stRes"></div>';
+    const res = await selfTest(S.kind, (i, n) => { $("mStatus").textContent = `${i}/${n}`; });
+    $("mStatus").textContent = "";
+    const box = $("stRes");
+    box.innerHTML = `<p><b>${res.ok} von ${res.total}</b> verlustfrei darstellbar.</p>`;
+    if (!res.failed.length) { box.innerHTML += "<p>Alles in Ordnung 👍</p>"; return; }
+    box.innerHTML += "<p>Diese lassen sich noch nicht verlustfrei darstellen (Speichern dort gesperrt) – gern als Beispiel (ohne echte Namen) melden:</p>";
+    for (const f of res.failed) {
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "stItem";
+      a.textContent = f.name + (f.error ? ` – ${f.error}` : "");
+      a.addEventListener("click", (e) => { e.preventDefault(); openItem(S.kind, f.id); });
+      box.appendChild(a);
+    }
+  }
+
+  // ---------- Knöpfe der neuen Bereiche ----------
+  $("tabAuto").addEventListener("click", () => switchKind("automation"));
+  $("tabScript").addEventListener("click", () => switchKind("script"));
+  $("insBtn").addEventListener("click", () => {
+    $("insp").classList.toggle("hidden");
+    store("haBlockly.insp", inspOpen() ? "1" : "0");
+    if (S.ws) Blockly.svgResize(S.ws);
+    if (inspOpen()) { loadRuns(); renderDetail(); } else { stopTemplates(); }
+  });
+  $("inspClose").addEventListener("click", () => $("insBtn").click());
+  $("runs").addEventListener("change", (e) => showRun(e.target.value));
+  $("runsReload").addEventListener("click", () => loadRuns());
+  $("live").addEventListener("change", (e) => setLive(e.target.checked));
+  $("xrefBtn").addEventListener("click", () => showXref(false));
+  $("selfTestBtn").addEventListener("click", () => showSelfTest());
+  $("mClose").addEventListener("click", closeModal);
+  $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
+  if (store("haBlockly.insp") === "1" && window.innerWidth >= 800) $("insp").classList.remove("hidden");
 
   // ---------- Anbindung ----------
   window.haBlockly = {
@@ -808,23 +1402,28 @@
       if (first) {
         initWorkspace();
         renderCategorySelect();
-        S.metaCount = automationList().length;
+        S.kind = store("haBlockly.kind") === "script" ? "script" : "automation";
+        renderTabs();
+        S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
+        S.metaCount = metaCount();
+        renderInsp(); renderDetail();
         refreshMeta().then(() => {
-          const last = store("haBlockly.last");
-          if (last && automationList().some((a) => a.id === last)) load(last);
+          const last = store(lastKey());
+          if (last && itemList().some((a) => a.id === last)) load(last);
         });
         // Native HA-Dialoge vorbereiten, deutsche Dienstnamen nachladen.
         try { parent.__haBlocklyPrepare && parent.__haBlocklyPrepare(); } catch (e) { /* optional */ }
         try {
           Promise.resolve(hass.loadBackendTranslation && hass.loadBackendTranslation("services"))
-            .then(() => setTimeout(() => S.ws.updateToolbox(HAB.buildToolbox()), 300))
+            .then(() => setTimeout(() => S.ws.updateToolbox(HAB.buildToolbox(rootKind())), 300))
             .catch(() => {});
         } catch (e) { /* optional */ }
         return;
       }
       // Neue, umbenannte oder ein-/ausgeschaltete Automationen nachziehen.
-      const count = automationList().length;
+      const count = metaCount();
       if (count !== S.metaCount) { S.metaCount = count; refreshMeta(); } else renderList();
+      liveTick();
     },
     selfTest,
     currentConfig: () => currentConfig(),
@@ -841,6 +1440,11 @@
     b.addEventListener("click", () => { menu.classList.add("hidden"); newAutomation(t.cfg); });
     menu.appendChild(b);
   }
+  menu.insertAdjacentHTML("beforeend", '<div class="mh">Neues Skript</div>');
+  const sb = document.createElement("button");
+  sb.textContent = "📜 Skript (Funktion) anlegen …";
+  sb.addEventListener("click", () => { menu.classList.add("hidden"); newScript(); });
+  menu.appendChild(sb);
   $("new").addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("hidden"); });
   document.addEventListener("click", (e) => { if (!menu.contains(e.target)) menu.classList.add("hidden"); });
   $("undo").addEventListener("click", () => S.ws && S.ws.undo(false));
@@ -852,9 +1456,9 @@
     HAB.hooks.simple = !on;
     if (!on) $("side").classList.add("hidden");
     if (!S.ws) return;
-    S.ws.updateToolbox(HAB.buildToolbox());
+    S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
     const cfg = currentConfig();
-    if (cfg) { S.busy = true; loadIntoWorkspace(S.ws, cfg); S.busy = false; showRoot(); updateStatus(); updateSide(); }
+    if (cfg) { reloadKeepingLayout(cfg); showRoot(); }
     Blockly.svgResize(S.ws);
     status(on ? "Expertenmodus: Eingabefelder und alle Bausteine" : "Einfacher Modus", "ok");
   });

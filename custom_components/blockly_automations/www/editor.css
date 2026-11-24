@@ -91,3 +91,72 @@ body.expert #expert { background: var(--accent); color: #fff; border-color: var(
   #list { left: 0; width: 85%; box-shadow: 0 0 24px rgba(0,0,0,.4); }
   .cat span { display: none; }
 }
+
+/* Liste: Automationen / Skripte */
+.tabs { display: flex; border-bottom: 1px solid var(--line); }
+.tab { flex: 1; border: 0; border-radius: 0; background: none; padding: 8px 6px; color: var(--muted); border-bottom: 2px solid transparent; }
+.tab.sel { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.listFoot { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.listFoot button { font-size: 12px; padding: 3px 8px; }
+.item .run { padding: 0 6px; font-size: 12px; }
+.item .running { color: var(--ok); font-size: 12px; }
+
+/* Inspektor: Abläufe, Live-Werte, Hinweise */
+#insp { width: 340px; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bar); min-height: 0; }
+#insp.hidden { display: none; }
+#insp .sideHead { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.ibody { flex: 1; overflow: auto; padding: 0 10px 10px; }
+.ibody section { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.ibody h4 { margin: 0 0 6px; font-size: 13px; }
+.ibody .row { display: flex; gap: 6px; }
+.ibody .row select { flex: 1; min-width: 0; }
+.ibody pre { margin: 2px 0 6px; padding: 6px; background: var(--input); border: 1px solid var(--line); border-radius: 4px;
+  font: 11px/1.4 Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
+.ibody code { font-size: 11px; }
+.dTitle { font-weight: 600; margin-bottom: 4px; }
+.step { margin: 6px 0; }
+.err { color: var(--warn); }
+.ent { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 13px; padding: 2px 0; }
+.ent b { margin-left: auto; }
+.chk { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.chk input { width: auto; }
+.hintItem { font-size: 13px; padding: 5px 6px; border-radius: 4px; cursor: pointer; margin: 2px 0; }
+.hintItem:hover { background: var(--hover); }
+.hintItem.warn { color: var(--warn); }
+.legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.lg::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 2px solid; }
+.lg.run::before { border-color: #00c853; }
+.lg.false::before { border-color: #ff6d00; }
+.lg.err::before { border-color: #d50000; }
+.lg.skip::before { border-color: var(--line); opacity: .5; }
+
+/* Markierungen an Bausteinen (direkt am eigenen Umriss, nicht an Kindern) */
+.hab-run > .blocklyPath { stroke: #00c853 !important; stroke-width: 4px !important; }
+.hab-false > .blocklyPath { stroke: #ff6d00 !important; stroke-width: 4px !important; }
+.hab-err > .blocklyPath { stroke: #d50000 !important; stroke-width: 5px !important; }
+.hab-skip > .blocklyPath { fill-opacity: .35; stroke-opacity: .35; }
+.hab-ltrue > .blocklyPath { stroke: #00c853 !important; stroke-width: 3px !important; stroke-dasharray: 7 4; }
+.hab-lfalse > .blocklyPath { stroke: #ff1744 !important; stroke-width: 3px !important; stroke-dasharray: 7 4; }
+.blocklyText.ha-alias { fill: #fff !important; fill-opacity: .9; font-style: italic; }
+
+/* Fenster (Querverweise, Selbsttest) */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal.hidden { display: none; }
+.mbox { background: var(--bar); color: var(--fg); border-radius: 10px; width: min(860px, 100%); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+.mhead { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.mhead b { font-size: 16px; }
+.mhead button { margin-left: auto; }
+#mBody { overflow: auto; padding: 10px 14px 14px; }
+.xhead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.xhead input[type=search] { flex: 1; min-width: 180px; }
+.xcard { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+.xent code { font-size: 12px; color: var(--muted); }
+.xrole { display: flex; gap: 6px 10px; flex-wrap: wrap; font-size: 13px; margin-top: 4px; }
+.xr { color: var(--muted); min-width: 110px; }
+#mBody a { color: var(--accent); text-decoration: none; }
+#mBody a:hover { text-decoration: underline; }
+.stItem { display: block; padding: 3px 0; }
+@media (max-width: 800px) {
+  #insp { position: absolute; top: 0; bottom: 0; right: 0; width: 100%; z-index: 50; }
+  .xr { min-width: 0; }
+}
