@@ -156,7 +156,7 @@
     ];
   }
 
-  const api = { VB, expr, compile, decode, blockToTree, treeToBlockJson, compileBlock, defineValueBlocks, toolboxContents };
+  const api = { tbBlock: bj, tbShadow: sh, VB, expr, compile, decode, blockToTree, treeToBlockJson, compileBlock, defineValueBlocks, toolboxContents };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAV = api;
 })(typeof window !== "undefined" ? window : globalThis);

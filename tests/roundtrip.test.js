@@ -33,8 +33,9 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".json"))) {
 }
 
 // 2) Jeder Block aus dem Werkzeugkasten übersteht den Rundlauf unverändert.
-for (const cat of HAB.buildToolbox().contents) {
-  for (const item of cat.contents.filter((x) => x.kind === "block")) {
+const allBlocks = (cats) => cats.flatMap((c) => (c.kind === "category" ? allBlocks(c.contents || []) : c.kind === "block" ? [c] : []));
+for (const cat of [{ kind: "category", contents: HAB.buildToolbox().contents }]) {
+  for (const item of allBlocks(cat.contents).filter((x) => x.extraState)) {
     ok(item.type, () => {
       const raw = item.extraState.raw;
       const b = toBlocks(raw, item.type.slice(3));
@@ -337,8 +338,11 @@ ok("blockly-modus", () => {
     }
     const box = HAB.buildToolbox("root");
     const names = box.contents.map((c) => c.name);
-    assert.ok(names.includes("Alle Dienste") && !names.includes("Roh-JSON"));
-    const all = box.contents.find((c) => c.name === "Alle Dienste");
+    for (const n of ["Auslöser", "Bedingungen", "Aktionen", "Logik", "Schleifen", "Zeit", "Mathematik", "Text", "Variablen"]) assert.ok(names.includes(n), n);
+    assert.ok(!names.includes("Roh-JSON"));
+    const aktionen = box.contents.find((c) => c.name === "Aktionen");
+    assert.ok(aktionen.contents.some((c) => c.name === "Licht"));
+    const all = aktionen.contents.find((c) => c.name === "Alle Dienste");
     assert.deepStrictEqual(all.contents.map((c) => c.contents.length).reduce((a, b) => a + b, 0), 4);
     const walk = (c) => (c.contents || []).flatMap((x) => (x.kind === "category" ? walk(x) : [x]));
     for (const item of walk(box).filter((x) => x.kind === "block" && x.extraState)) {
@@ -374,6 +378,17 @@ ok("blockly-modus", () => {
     HAB.hooks.serviceTarget = () => null;
     HAB.hooks.deviceEntry = () => null;
   }
+});
+
+// 20b) Dienst-Bausteine sagen im Kopf, was sie tun.
+ok("dienst-titel", () => {
+  const prev = HAB.hooks.serviceName;
+  HAB.hooks.serviceName = (x) => (x === "light.turn_on" ? "· Leuchte einschalten" : "");
+  try {
+    assert.strictEqual(HAB.serviceTitle("light.turn_on"), "💡 Leuchte einschalten");
+    assert.ok(HAB.serviceTitle("switch.turn_off").startsWith("🔌 ") && HAB.serviceTitle("switch.turn_off").endsWith("ausschalten"));
+    assert.strictEqual(HAB.serviceTitle(""), "▶️ Dienst aufrufen");
+  } finally { HAB.hooks.serviceName = prev; }
 });
 
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.

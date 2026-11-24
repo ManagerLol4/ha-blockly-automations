@@ -104,7 +104,8 @@
 
   // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
   const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count)$/;
-  const valueSlot = (f) => hooks.blockly && !f.row && !f.dur && ["text", "template", "number"].includes(f.type) && VALUE_PATH.test(f.path);
+  const valuesOn = () => !!(hooks.blockly || hooks.expert);
+  const valueSlot = (f) => valuesOn() && !f.row && !f.dur && ["text", "template", "number"].includes(f.type) && VALUE_PATH.test(f.path);
 
   // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
   // Zeiträume (Std/Min/Sek) werden zu einem Wert zusammengefasst, Profi-Optionen
@@ -403,7 +404,7 @@
       else if (isObj(a.data)) fields.push(F("data", "Daten (JSON)", { type: "json" }));
       fields.push(P("data_template", "Daten (alt)", { type: "json" }));
       fields.push(P("response_variable", "Antwort in Variable"));
-      return mk("▶️ Dienst aufrufen", fields);
+      return mk(serviceTitle(svc), fields);
     }
     if ("event" in a) return mk("📣 Ereignis senden", [F("event", "Typ"), F("event_data", "Daten (JSON)", { type: "json" })]);
     if ("scene" in a) return mk("🎬 Szene aktivieren", [F("scene", "", { type: "entity", domains: ["scene"] })]);
@@ -412,6 +413,34 @@
       return mk("📦 Variablen setzen", Object.keys(a.variables).map((k) => F(`variables.${k}`, k, { type: isPrim(a.variables[k]) ? "text" : "json" })), [], C.flow);
     if ("device_id" in a) return mk(deviceTitle(a), deviceFields("action"));
     return { ...mk("Aktion (unbekannt)", []), colour: C.generic, generic: true };
+  }
+
+  // Kopfzeile eines Dienst-Bausteins: Symbol des Bereichs + Name des Dienstes („💡 Leuchte einschalten“).
+  const DOMAIN_ICON = {
+    light: "💡", switch: "🔌", fan: "🌀", climate: "🌡️", water_heater: "🚿", humidifier: "💧", cover: "🪟", lock: "🔒",
+    media_player: "🔈", remote: "📺", camera: "📷", vacuum: "🧹", lawn_mower: "🌱", alarm_control_panel: "🚨", siren: "🚨",
+    notify: "📱", persistent_notification: "🔔", tts: "🗣️", logbook: "📓", system_log: "📓",
+    script: "📜", automation: "🤖", scene: "🎬", homeassistant: "🏠",
+    input_boolean: "🎚️", input_number: "🎚️", input_select: "🎚️", input_text: "🎚️", input_datetime: "🎚️", input_button: "🎚️",
+    counter: "🔢", timer: "⏲️", number: "🔢", select: "📋", button: "🔘", todo: "✅", calendar: "📅", weather: "🌦️",
+    valve: "🚰", event: "📣", update: "⬆️", zone: "📍", person: "🧑", device_tracker: "📍",
+  };
+  const SVC_WORDS = { turn_on: "einschalten", turn_off: "ausschalten", toggle: "umschalten", open_cover: "öffnen", close_cover: "schließen",
+    stop_cover: "stoppen", set_value: "Wert setzen", select_option: "Option wählen", press: "drücken", reload: "neu laden", trigger: "auslösen",
+    lock: "abschließen", unlock: "aufschließen", set_temperature: "Temperatur setzen", set_hvac_mode: "Modus setzen" };
+  const DOMAIN_DE = { light: "Licht", switch: "Schalter", fan: "Ventilator", climate: "Heizung", cover: "Rollladen", lock: "Schloss",
+    media_player: "Medienplayer", notify: "Nachricht", scene: "Szene", script: "Skript", automation: "Automation", homeassistant: "Gerät",
+    input_boolean: "Schalter-Helfer", input_number: "Zahlen-Helfer", input_select: "Auswahl-Helfer", input_text: "Text-Helfer",
+    input_button: "Taster-Helfer", counter: "Zähler", timer: "Timer", vacuum: "Staubsauger", persistent_notification: "Hinweis" };
+  function serviceTitle(svc) {
+    if (typeof svc !== "string" || !svc.includes(".")) return "▶️ Dienst aufrufen";
+    const [d, s] = svc.split(".");
+    const icon = DOMAIN_ICON[d] || "▶️";
+    let n = "";
+    try { n = String(hooks.serviceName(svc) || "").replace(/^·\s*/, ""); } catch (e) { n = ""; }
+    if (!n && d === "script") { try { n = String(hooks.entityName(svc) || ""); } catch (e) { n = ""; } }
+    if (!n) n = `${DOMAIN_DE[d] || hooks.domainName(d) || d} ${SVC_WORDS[s] || s.replace(/_/g, " ")}`;
+    return `${icon} ${n}`;
   }
 
   const MODE_FIELDS = (cfg) => [
@@ -518,7 +547,7 @@
     const json = { type: "ha_" + kind, extraState: { raw: clone(item) } };
     if (isObj(item) && item.enabled === false && !ROOTS.has(kind)) json.enabled = false;
     // Templates aus Wert-Bausteinen wieder als Bausteine einstecken.
-    if (hooks.blockly && isObj(item)) {
+    if (valuesOn() && isObj(item)) {
       spec.fields.forEach((f, i) => {
         if (!valueSlot(f)) return;
         const tree = HAV.decode(getPath(item, f.path));
@@ -993,9 +1022,11 @@
           }
           if (f.type === "service") {
             this.serviceField_ = name;
-            const lbl = new Blockly.FieldLabel(hooks.serviceName(str), "ha-entity-name");
+            const block = this;
+            const dn = (x) => (typeof x === "string" && x.includes(".") ? "· " + (hooks.domainName(x.split(".")[0]) || "") : "");
+            const lbl = new Blockly.FieldLabel(dn(str), "ha-entity-name");
             inp.appendField(lbl, "N" + i);
-            fld.setValidator((nv) => { lbl.setValue(hooks.serviceName(nv)); return nv; });
+            fld.setValidator((nv) => { lbl.setValue(dn(nv)); if (block.getField("TITLE")) block.setFieldValue(serviceTitle(nv), "TITLE"); return nv; });
           }
         });
         // Skript-Eingaben (fields) im einfachen Modus als anklickbarer Wert.
@@ -1108,34 +1139,6 @@
     const svc = (s, extra = {}) => tb("action", { action: s, target: { entity_id: "" }, ...extra });
     const notifyServices = services.filter((s) => s.startsWith("notify.") && s !== "notify.send_message");
 
-    const actionBlocks = [
-      label("Allgemein"),
-      tb("action", { action: "", target: { entity_id: "" }, data: {} }),
-      label("Licht & Schalter"),
-      svc("light.turn_on"), svc("light.turn_off"), svc("light.toggle"),
-      svc("switch.turn_on"), svc("switch.turn_off"),
-      svc("homeassistant.turn_on"), svc("homeassistant.turn_off"), svc("homeassistant.toggle"),
-      label("Klima & Cover"),
-      svc("climate.set_temperature", { data: { temperature: 20 } }),
-      svc("climate.set_hvac_mode", { data: { hvac_mode: "heat" } }),
-      svc("cover.open_cover"), svc("cover.close_cover"),
-      label("Helfer & Szenen"),
-      svc("input_boolean.turn_on"), svc("input_boolean.turn_off"),
-      svc("input_number.set_value", { data: { value: 0 } }),
-      svc("input_select.select_option", { data: { option: "" } }),
-      tb("action", { scene: "" }),
-      svc("script.turn_on"),
-      svc("automation.trigger"),
-      label("Medien"),
-      svc("media_player.media_pause"), svc("media_player.volume_set", { data: { volume_level: 0.3 } }),
-      label("Benachrichtigen"),
-      ...notifyServices.slice(0, 8).map((s) => tb("action", { action: s, data: { message: "" } })),
-      tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
-      ...(has("tts.speak") ? [tb("action", { action: "tts.speak", target: { entity_id: "" }, data: { media_player_entity_id: "", message: "" } })] : []),
-      label("Ereignis & Variablen"),
-      tb("action", { event: "", event_data: {} }),
-      tb("action", { variables: { name: "wert" } }),
-    ].filter((x) => x.kind === "label" || !x.extraState.raw.action || x.extraState.raw.action === "" || !services.length || has(x.extraState.raw.action));
 
     const btn = (text, callbackKey) => ({ kind: "button", text, callbackKey });
     // Skripte = eigene Funktionen: als Aufruf-Baustein; ihre Eingaben kommen aus dem Dienst-Schema.
@@ -1190,81 +1193,172 @@
       });
     }
 
+    // Wie ioBroker: viele kleine Kategorien. Manche Bausteine stehen an mehreren Stellen.
+    const V = HAV.tbBlock;
+    const sh = HAV.tbShadow;
+    const cat = (name, colour, contents) => ({ kind: "category", name, colour: String(colour), contents });
+    const svcCat = (name, list) => {
+      const items = list.filter((x) => x.kind !== "block" || !x.extraState.raw.action || !services.length || has(x.extraState.raw.action));
+      return items.some((x) => x.kind === "block") ? cat(name, C.action, items) : null;
+    };
+    const dom = (d) => services.filter((x) => typeof x === "string" && x.startsWith(d + "."));
+    const svcsOf = (d, first, extra = {}) => {
+      const rest = dom(d).filter((x) => !first.includes(x)).sort();
+      return [...first.map((x) => svc(x, extra[x])), ...(rest.length ? [label("weitere"), ...rest.map((x) => svc(x))] : [])];
+    };
+    const actionCats = [
+      cat("Allgemein", C.action, [
+        btn("＋ Aktion nach Typ wählen …", "type_action"),
+        label("Beliebigen Dienst aufrufen (Dienst im Feld wählen):"),
+        tb("action", { action: "", target: { entity_id: "" }, data: {} }),
+        tb("action", { scene: "" }),
+        tb("action", { event: "", event_data: {} }),
+        ...(hooks.blockly ? [label("Gerät"), tb("action", { device_id: "" })] : []),
+      ]),
+      svcCat("Licht", svcsOf("light", ["light.turn_on", "light.turn_off", "light.toggle"])),
+      svcCat("Schalter & Steckdosen", [...svcsOf("switch", ["switch.turn_on", "switch.turn_off", "switch.toggle"]),
+        label("Alles, was sich schalten lässt"), svc("homeassistant.turn_on"), svc("homeassistant.turn_off"), svc("homeassistant.toggle")]),
+      svcCat("Heizung & Klima", [...svcsOf("climate", ["climate.set_temperature", "climate.set_hvac_mode"],
+        { "climate.set_temperature": { data: { temperature: 20 } }, "climate.set_hvac_mode": { data: { hvac_mode: "heat" } } }),
+        ...(dom("fan").length ? [label("Ventilator"), ...dom("fan").sort().map((x) => svc(x))] : [])]),
+      svcCat("Rollläden & Tore", svcsOf("cover", ["cover.open_cover", "cover.close_cover", "cover.stop_cover"])),
+      svcCat("Schlösser", svcsOf("lock", ["lock.lock", "lock.unlock"])),
+      svcCat("Medien", svcsOf("media_player", ["media_player.media_play", "media_player.media_pause", "media_player.volume_set"],
+        { "media_player.volume_set": { data: { volume_level: 0.3 } } })),
+      svcCat("Benachrichtigen", [
+        ...notifyServices.map((x) => tb("action", { action: x, data: { title: "", message: "" } })),
+        tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
+        ...(has("tts.speak") ? [tb("action", { action: "tts.speak", target: { entity_id: "" }, data: { media_player_entity_id: "", message: "" } })] : []),
+        ...(has("logbook.log") ? [tb("action", { action: "logbook.log", data: { name: "", message: "" } })] : []),
+      ]),
+      svcCat("Helfer", [
+        svc("input_boolean.turn_on"), svc("input_boolean.turn_off"), svc("input_boolean.toggle"),
+        svc("input_number.set_value", { data: { value: 0 } }),
+        svc("input_select.select_option", { data: { option: "" } }),
+        svc("input_text.set_value", { data: { value: "" } }),
+        svc("input_button.press"),
+        svc("counter.increment"), svc("counter.reset"),
+        svc("timer.start"), svc("timer.cancel"),
+      ]),
+      svcCat("Automationen & Skripte", [svc("automation.trigger"), svc("automation.turn_on"), svc("automation.turn_off"), svc("script.turn_on")]),
+    ].filter(Boolean);
+
     return forKind({
       kind: "categoryToolbox",
       contents: [
-        { kind: "category", name: "Auslöser", colour: String(C.trigger), contents: [
+        cat("Auslöser", C.trigger, [
           btn("＋ Auslöser nach Typ wählen …", "type_trigger"),
+          label("Zustand"),
           tb("trigger", { trigger: "state", entity_id: "", to: "" }),
           tb("trigger", { trigger: "numeric_state", entity_id: "", above: 20 }),
+          label("Zeit"),
           tb("trigger", { trigger: "time", at: "07:00:00" }),
           tb("trigger", { trigger: "time_pattern", minutes: "/5" }),
           tb("trigger", { trigger: "sun", event: "sunset", offset: "00:00:00" }),
+          tb("trigger", { trigger: "calendar", entity_id: "", event: "start", offset: "0:0:0" }),
+          label("Ort"),
           tb("trigger", { trigger: "zone", entity_id: "", zone: "zone.home", event: "enter" }),
-          tb("trigger", { trigger: "template", value_template: "" }),
+          label("Ereignisse"),
           tb("trigger", { trigger: "homeassistant", event: "start" }),
           tb("trigger", { trigger: "event", event_type: "" }),
-          tb("trigger", { trigger: "calendar", entity_id: "", event: "start", offset: "0:0:0" }),
-          tb("trigger", { trigger: "conversation", command: "" }),
           tb("trigger", { trigger: "mqtt", topic: "" }),
           tb("trigger", { trigger: "webhook", webhook_id: "", local_only: true }),
           tb("trigger", { trigger: "tag", tag_id: "" }),
+          tb("trigger", { trigger: "conversation", command: "" }),
           tb("trigger", { trigger: "persistent_notification", notification_id: "" }),
+          tb("trigger", { trigger: "template", value_template: "" }),
           ...(hooks.blockly ? [label("Gerät"), tb("trigger", { trigger: "device", device_id: "" })] : []),
-        ] },
-        { kind: "category", name: "Bedingungen", colour: String(C.condition), contents: [
+        ]),
+        cat("Bedingungen", C.condition, [
           btn("＋ Bedingung nach Typ wählen …", "type_condition"),
+          label("Zustand"),
           tb("condition", { condition: "state", entity_id: "", state: "" }),
           tb("condition", { condition: "numeric_state", entity_id: "", below: 20 }),
+          tb("condition", { condition: "trigger", id: "" }),
+          label("Zeit und Ort"),
           tb("condition", { condition: "time", after: "08:00:00", before: "22:00:00" }),
           tb("condition", { condition: "sun", after: "sunset" }),
           tb("condition", { condition: "zone", entity_id: "", zone: "zone.home" }),
-          tb("condition", { condition: "trigger", id: "" }),
-          tb("condition", { condition: "template", value_template: "" }),
-          label("Logik"),
+          label("Verknüpfen"),
           tb("condition", { condition: "and", conditions: [] }),
           tb("condition", { condition: "or", conditions: [] }),
           tb("condition", { condition: "not", conditions: [] }),
+          label("Eigene Logik (Bausteine aus „Logik“ in die Lücke stecken)"),
+          tb("condition", { condition: "template", value_template: "" }),
           ...(hooks.blockly ? [label("Gerät"), tb("condition", { condition: "device", device_id: "" })] : []),
-        ] },
-        { kind: "category", name: "Aktionen", colour: String(C.action), contents: [
-          btn("＋ Aktion nach Typ wählen …", "type_action"),
-          ...actionBlocks,
-          ...(hooks.blockly ? [label("Gerät"), tb("action", { device_id: "" })] : []),
-        ] },
-        { kind: "category", name: "Ablauf", colour: String(C.flow), contents: [
+        ]),
+        { kind: "category", name: "Aktionen", colour: String(C.action), contents: [...actionCats, ...(services.length ? [allServicesCat()] : [])] },
+        cat("Logik", C.condition, [
+          label("Verzweigen"),
           tb("action", { if: [], then: [], else: [] }),
           tb("action", { choose: [{ conditions: [], sequence: [] }], default: [] }),
           tb("option", { conditions: [], sequence: [] }),
-          tb("action", { delay: { hours: 0, minutes: 1, seconds: 0 } }),
-          tb("action", { wait_template: "", timeout: { minutes: 5 }, continue_on_timeout: true }),
-          tb("action", { wait_for_trigger: [], timeout: { minutes: 5 } }),
+          label("Vergleichen und verknüpfen (in Lücken von Bedingungen und Feldern stecken)"),
+          V("cmp", { op: "==" }, { A: sh("state"), B: sh("txt", { s: "on" }) }),
+          V("cmp", { op: ">" }, { A: sh("statenum"), B: sh("num", { n: 20 }) }),
+          V("logic", { op: "and" }), V("logic", { op: "or" }), V("not"), V("isstate"), V("bool"), V("ifelse"),
+        ]),
+        cat("Schleifen", C.flow, [
           tb("action", { repeat: { count: 2, sequence: [] } }),
           tb("action", { repeat: { while: [], sequence: [] } }),
           tb("action", { repeat: { until: [], sequence: [] } }),
+          tb("action", { repeat: { for_each: [], sequence: [] } }),
+          label("Wert in der Schleife"),
+          V("var", { v: "repeat.index" }), V("var", { v: "repeat.item" }),
+        ]),
+        cat("Zeit", C.flow, [
+          label("Warten"),
+          tb("action", { delay: { hours: 0, minutes: 1, seconds: 0 } }),
+          tb("action", { wait_template: "", timeout: { minutes: 5 }, continue_on_timeout: true }),
+          tb("action", { wait_for_trigger: [], timeout: { minutes: 5 } }),
+          label("Zeitpunkt als Auslöser"),
+          tb("trigger", { trigger: "time", at: "07:00:00" }),
+          tb("trigger", { trigger: "time_pattern", minutes: "/5" }),
+          tb("trigger", { trigger: "sun", event: "sunset", offset: "00:00:00" }),
+          label("Nur zu bestimmten Zeiten"),
+          tb("condition", { condition: "time", after: "08:00:00", before: "22:00:00" }),
+          tb("condition", { condition: "time", weekday: ["sat", "sun"] }),
+          tb("condition", { condition: "sun", after: "sunset" }),
+          label("Aktuelle Zeit als Wert"),
+          V("now"), V("now", { w: "now().hour" }), V("now", { w: "now().weekday()" }),
+        ]),
+        cat("Mathematik", 230, [
+          V("num"),
+          V("math", { op: "+" }, { A: sh("num", { n: 1 }), B: sh("num", { n: 1 }) }),
+          V("math", { op: "*" }, { A: sh("statenum"), B: sh("num", { n: 2 }) }),
+          V("round", { n: 1 }), V("tonum"), V("statenum"),
+          V("cmp", { op: ">" }, { A: sh("statenum"), B: sh("num", { n: 20 }) }),
+        ]),
+        cat("Text", 160, [
+          V("txt"),
+          V("join", null, { A: sh("txt", { s: "Temperatur: " }), B: sh("state") }),
+          V("totext"),
+          label("Text verschicken"),
+          tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
+          ...notifyServices.slice(0, 3).map((x) => tb("action", { action: x, data: { message: "" } })),
+        ]),
+        cat("Werte aus HA", 30, [
+          V("state"), V("statenum"), V("attr"), V("isstate"),
+          label("Was die Automation ausgelöst hat"),
+          V("trig"), V("trig", { w: "trigger.to_state.state" }), V("trig", { w: "trigger.entity_id" }),
+        ]),
+        cat("Variablen", 330, [
+          tb("action", { variables: { name: "wert" } }),
+          V("var"),
+          label("Antwort eines Dienstes: im Dienst-Baustein „Antwort in Variable“ eintragen."),
+        ]),
+        cat("Ablauf", C.flow, [
           tb("action", { parallel: [] }),
           tb("action", { sequence: [] }),
           tb("action", { stop: "" }),
-        ] },
-        ...(hooks.blockly && !hooks.expert ? [] : [{ kind: "category", name: "Roh-JSON", colour: C.generic, contents: [
+          tb("action", { stop: "Fehler", error: true }),
+        ]),
+        ...(hooks.blockly && !hooks.expert ? [] : [cat("Roh-JSON", C.generic, [
           label("Für alles ohne eigenen Block – rechts im JSON-Feld bearbeiten"),
           tb("action", {}),
-        ] }]),
-        ...(hooks.blockly ? [allServicesCat(), valuesCat()] : []),
+        ])]),
       ],
     });
-  }
-
-  // Blockly-Modus: Werte & Logik (werden zu Templates) und die Bedingung, die sie aufnimmt.
-  function valuesCat() {
-    return {
-      kind: "category", name: "Werte & Logik", colour: "210",
-      contents: [
-        { kind: "label", text: "Bedingung aus Logik-Bausteinen (Logik in die Lücke stecken):" },
-        tb("condition", { condition: "template", value_template: "" }),
-        ...HAV.toolboxContents(),
-      ],
-    };
   }
 
   // Blockly-Modus: alle Dienste aus HA, nach Bereich (Domain) sortiert.
@@ -1894,7 +1988,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { serviceTitle, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);
