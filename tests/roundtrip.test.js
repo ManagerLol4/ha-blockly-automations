@@ -448,6 +448,44 @@ ok("yaml", () => {
   ].join("\n"));
 });
 
+// 23) Als Skript auslagern: Auslöser-Daten und Variablen werden übergeben, Verhalten bleibt gleich.
+ok("skript-auslagern", () => {
+  const HAV = HAB.HAV;
+  const tplTree = { k: "join", a: [{ k: "txt", f: { s: "Neu: " } }, { k: "trig", f: { w: "trigger.to_state.state" } }] };
+  const items = [
+    { action: "notify.notify", data: { message: "{{ trigger.to_state.name }} ist {{ trigger.to_state.state }} ({{ grenze }})", title: HAV.compile(tplTree) } },
+    { choose: [{ conditions: [{ condition: "trigger", id: ["an", "1"], alias: "an?" }], sequence: [{ delay: 1 }] }] },
+    { variables: { intern: 5 } },
+    { action: "light.turn_on", data: { brightness_pct: "{{ intern }}" } },
+    { repeat: { count: 2, sequence: [{ action: "logbook.log", data: { message: "{{ repeat.index }}" } }] } },
+    { action: "logbook.log", data: { message: "'trigger.id' bleibt Text, {{ unbekannt }} bleibt" } },
+  ];
+  const plan = HAB.planExtract(items, ["grenze", "intern", "nicht_genutzt"]);
+  // Übergabe: genau die genutzten Werte
+  assert.deepStrictEqual(Object.keys(plan.data).sort(), ["grenze", "trigger_id", "trigger_to_state_name", "trigger_to_state_state"]);
+  assert.strictEqual(plan.data.trigger_to_state_state, "{{ trigger.to_state.state }}");
+  assert.strictEqual(plan.data.grenze, "{{ grenze }}");
+  assert.deepStrictEqual(Object.keys(plan.fields).sort(), Object.keys(plan.data).sort());
+  // Umschreiben im Skript
+  assert.strictEqual(plan.sequence[0].data.message, "{{ trigger_to_state_name }} ist {{ trigger_to_state_state }} ({{ grenze }})");
+  const t = HAV.decode(plan.sequence[0].data.title);
+  assert.ok(t, "Wert-Bausteine bleiben Bausteine");
+  assert.deepStrictEqual(t.a[1], { k: "var", f: { v: "trigger_to_state_state" } });
+  assert.deepStrictEqual(plan.sequence[1].choose[0].conditions[0], { condition: "template", value_template: "{{ (trigger_id | string) in ['an', '1'] }}", alias: "an?" });
+  // Eigene Variablen und repeat innerhalb der Schritte bleiben intern
+  assert.strictEqual(plan.sequence[3].data.brightness_pct, "{{ intern }}");
+  assert.strictEqual(plan.sequence[4].repeat.sequence[0].data.message, "{{ repeat.index }}");
+  assert.strictEqual(plan.sequence[5].data.message, "'trigger.id' bleibt Text, {{ unbekannt }} bleibt");
+  assert.ok(plan.notes.some((n) => /intern/.test(n)));
+  // Ohne Bezüge: nichts zu übergeben
+  const p2 = HAB.planExtract([{ action: "light.turn_on", target: { entity_id: "light.a" } }], ["x"]);
+  assert.deepStrictEqual([p2.fields, p2.data, p2.notes], [{}, {}, []]);
+  // repeat.index außerhalb der Schritte wird übergeben
+  const p3 = HAB.planExtract([{ action: "logbook.log", data: { message: "{{ repeat.index }}" } }]);
+  assert.deepStrictEqual(p3.data, { repeat_index: "{{ repeat.index }}" });
+  assert.strictEqual(p3.sequence[0].data.message, "{{ repeat_index }}");
+});
+
 // 13) Versionsnummern stimmen überein (manifest, package.json, version.json).
 ok("version", () => {
   const read = (...p) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", ...p), "utf8")).version;

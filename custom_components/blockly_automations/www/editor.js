@@ -586,11 +586,18 @@
     const taken = new Set(itemList("script").map((a) => a.id));
     let id = base;
     for (let i = 2; taken.has(id) || S.hass.states["script." + id]; i++) id = `${base}_${i}`;
-    const sequence = blocks.map((b) => HAB.blockToItem(b));
+    // Genutzte Auslöser-Daten und Variablen als Eingaben übergeben (ein Skript sieht sie sonst nicht).
+    const plan = HAB.planExtract(blocks.map((b) => HAB.blockToItem(b)), variableNames());
     const from = (currentConfig() || {}).alias || "";
+    const script = { alias: name, description: from ? `Ausgelagert aus „${from}“` : "" };
+    if (Object.keys(plan.fields).length) script.fields = plan.fields;
+    // parallel: mehrere Automationen dürfen das Skript gleichzeitig aufrufen (wie vorher die eingebauten Schritte).
+    Object.assign(script, { sequence: plan.sequence, mode: "parallel", max: 10 });
     try {
-      await apiFor("script", "POST", id, { alias: name, description: from ? `Ausgelagert aus „${from}“` : "", sequence, mode: "single" });
+      await apiFor("script", "POST", id, script);
     } catch (e) { status("Skript nicht angelegt: " + errText(e), "warn"); return; }
+    const call = { action: "script." + id };
+    if (Object.keys(plan.data).length) call.data = plan.data;
     const prev = block.previousConnection && block.previousConnection.targetConnection;
     const after = blocks[blocks.length - 1].getNextBlock();
     Blockly.Events.setGroup(true);
@@ -598,13 +605,16 @@
       if (after) after.unplug(false);
       block.unplug(false);
       blocks.forEach((b) => b.dispose(false));
-      const nb = Blockly.serialization.blocks.append(HAB.itemToBlockJson("action", { action: "script." + id }), S.ws);
+      const nb = Blockly.serialization.blocks.append(HAB.itemToBlockJson("action", call), S.ws);
       if (prev) prev.connect(nb.previousConnection);
       if (after && nb.nextConnection) nb.nextConnection.connect(after.previousConnection);
       nb.select();
     } finally { Blockly.Events.setGroup(false); }
     S.xref = null;
-    status(`📜 Skript „${name}“ (script.${id}) angelegt – Automation noch speichern.`, "ok");
+    const passed = Object.keys(plan.data);
+    const msg = `📜 Skript „${name}“ (script.${id}) angelegt${passed.length ? ` – übergibt ${passed.join(", ")}` : ""}. Automation noch speichern.`;
+    // Nach der normalen Statuszeile anzeigen (die kommt mit den Änderungs-Ereignissen).
+    setTimeout(() => status(plan.notes.length ? msg + " ⚠ " + plan.notes.join(" ") : msg, plan.notes.length ? "warn" : "ok"), 100);
   };
 
   if (BLOCKLY) {

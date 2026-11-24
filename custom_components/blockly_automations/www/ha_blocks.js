@@ -1482,9 +1482,133 @@
     return ind + yScalar(v);
   }
 
+  /* ---------- Schritte als Skript auslagern ----------
+   * Ein Skript sieht die Variablen der Automation nicht (trigger, repeat, wait, eigene
+   * Variablen). Deshalb: genutzte Werte als Eingaben (fields) anlegen, beim Aufruf
+   * übergeben und im Skript auf die Eingaben umschreiben.
+   *   items: die ausgelagerten Schritte; known: Variablennamen der Automation.
+   * Ergebnis: { fields, data, sequence, notes } */
+  const CTX_ROOTS = ["trigger", "repeat", "wait", "this"];
+  const TPL_SPLIT = /(\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\})/;
+  const stripStrings = (t) => t.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g, "''");
+  const dottedRe = () => /(?<![\w.])(trigger|repeat|wait|this)((?:\.[A-Za-z_]\w*)+)/g;
+  const fieldNameOf = (expr) => expr.replace(/\./g, "_");
+  function deepStrings(v, fn) {
+    if (typeof v === "string") fn(v);
+    else if (Array.isArray(v)) v.forEach((x) => deepStrings(x, fn));
+    else if (isObj(v)) Object.values(v).forEach((x) => deepStrings(x, fn));
+  }
+  function deepMap(v, fn) {
+    if (typeof v === "string") return fn(v);
+    if (Array.isArray(v)) return v.map((x) => deepMap(x, fn));
+    if (isObj(v)) { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = deepMap(x, fn); return o; }
+    return v;
+  }
+  function deepWalk(v, fn) {
+    if (Array.isArray(v)) v.forEach((x) => deepWalk(x, fn));
+    else if (isObj(v)) { fn(v); Object.values(v).forEach((x) => deepWalk(x, fn)); }
+  }
+  // Variablen-Bezüge in einem Template: { dotted: Set("trigger.to_state.state"), plain: Set("helligkeit"), bare: Set("trigger") }
+  function templateRefs(str, known) {
+    const out = { dotted: new Set(), plain: new Set(), bare: new Set() };
+    for (const part of String(str).split(TPL_SPLIT)) {
+      if (!TPL_SPLIT.test(part)) continue;
+      const code = stripStrings(part.replace(/\{#[\s\S]*?#\}/g, ""));
+      for (const m of code.matchAll(dottedRe())) out.dotted.add(m[1] + m[2]);
+      for (const m of code.matchAll(/(?<![\w.])([A-Za-z_]\w*)(?![\w(])/g)) {
+        const n = m[1];
+        if (CTX_ROOTS.includes(n)) { if (!new RegExp(`(?<![\\w.])${n}\\.`).test(code)) out.bare.add(n); continue; }
+        if (known.has(n)) out.plain.add(n);
+      }
+    }
+    return out;
+  }
+  function planExtract(items, known = []) {
+    const knownSet = new Set(known);
+    // Was die Schritte selbst festlegen, muss nicht übergeben werden.
+    const defined = new Set();
+    let hasRepeat = false, hasWait = false;
+    deepWalk(items, (o) => {
+      if (isObj(o.variables)) Object.keys(o.variables).forEach((k) => defined.add(k));
+      if (typeof o.response_variable === "string") defined.add(o.response_variable);
+      if ("repeat" in o) hasRepeat = true;
+      if ("wait_for_trigger" in o || "wait_template" in o) hasWait = true;
+    });
+    const internal = (expr) => (expr.startsWith("repeat.") && hasRepeat) || (expr.startsWith("wait.") && hasWait);
+    const dotted = new Set(), plain = new Set(), bare = new Set();
+    let triggerCond = false;
+    deepWalk(items, (o) => { if (o.condition === "trigger") { triggerCond = true; dotted.add("trigger.id"); } });
+    deepStrings(items, (str) => {
+      const tree = HAV.decode(str);
+      const r = templateRefs(str, knownSet);
+      r.dotted.forEach((x) => dotted.add(x));
+      r.plain.forEach((x) => plain.add(x));
+      r.bare.forEach((x) => bare.add(x));
+      if (tree) (function walk(t) {
+        if (!t) return;
+        if (t.k === "trig" && t.f) dotted.add(t.f.w);
+        if (t.k === "var" && t.f && /^(trigger|repeat|wait|this)\./.test(t.f.v)) dotted.add(t.f.v);
+        (t.a || []).forEach(walk);
+      })(tree);
+    });
+    const pass = [...dotted].filter((d) => !internal(d)).sort((a, b) => b.length - a.length);
+    const plainPass = [...plain].filter((n) => !defined.has(n));
+    const map = {};
+    for (const d of pass) map[d] = fieldNameOf(d);
+    // Umschreiben: Templates (auch Wert-Bausteine) und „Ausgelöst durch ID“.
+    const rewriteText = (str) => str.split(TPL_SPLIT).map((part) => {
+      if (!TPL_SPLIT.test(part)) return part;
+      let out = part;
+      for (const d of pass) out = out.replace(new RegExp(`(?<![\\w.])${d.replace(/\./g, "\\.")}(?![\\w])`, "g"), map[d]);
+      return out;
+    }).join("");
+    const rewriteTree = (t) => {
+      if (!t) return t;
+      const n = clone(t);
+      if (n.k === "trig" && n.f && map[n.f.w]) { n.k = "var"; n.f = { v: map[n.f.w] }; }
+      else if (n.k === "var" && n.f && map[n.f.v]) n.f = { v: map[n.f.v] };
+      if (n.a) n.a = n.a.map(rewriteTree);
+      return n;
+    };
+    let sequence = deepMap(items, (str) => {
+      const tree = HAV.decode(str);
+      return tree ? HAV.compile(rewriteTree(tree)) : rewriteText(str);
+    });
+    if (triggerCond) {
+      const fix = (v) => {
+        if (Array.isArray(v)) return v.map(fix);
+        if (!isObj(v)) return v;
+        const o = {};
+        for (const [k, x] of Object.entries(v)) o[k] = fix(x);
+        if (o.condition === "trigger") {
+          const ids = [].concat(o.id === undefined ? [] : o.id).map((x) => "'" + String(x).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'");
+          const n = { condition: "template", value_template: `{{ (${map["trigger.id"]} | string) in [${ids.join(", ")}] }}` };
+          for (const k of ["alias", "enabled"]) if (o[k] !== undefined) n[k] = o[k];
+          return n;
+        }
+        return o;
+      };
+      sequence = fix(sequence);
+    }
+    const fields = {}, data = {};
+    for (const d of pass) {
+      fields[map[d]] = { name: d, description: "Wird von der aufrufenden Automation übergeben.", selector: { text: {} } };
+      data[map[d]] = `{{ ${d} }}`;
+    }
+    for (const n of plainPass) {
+      fields[n] = { name: n, description: "Variable der aufrufenden Automation.", selector: { object: {} } };
+      data[n] = `{{ ${n} }}`;
+    }
+    const notes = [];
+    if (bare.size) notes.push(`Die Schritte nutzen „${[...bare].join(", ")}“ als Ganzes – das lässt sich nicht übergeben. Bitte im Skript prüfen.`);
+    const leaking = [...defined];
+    if (leaking.length) notes.push(`Variablen aus den ausgelagerten Schritten (${leaking.join(", ")}) stehen danach in der Automation nicht mehr zur Verfügung.`);
+    return { fields, data, sequence, notes };
+  }
+
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

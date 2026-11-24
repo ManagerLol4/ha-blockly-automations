@@ -54,6 +54,9 @@ Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
 - **Variablen:** „＋ Variable“ in *Variablen setzen*; *Variable*-Baustein mit Auswahl der vorhandenen Namen.
 - **＋ sonst wenn …** am *Wenn*-Baustein (wird dabei zur Auswahl mit mehreren Zweigen).
 - **Als neues Skript auslagern** (Rechtsklick auf einen Schritt): legt das Skript an und setzt den Aufruf ein.
+  Genutzte Auslöser-Daten (z. B. `trigger.to_state.state`, Trigger-ID) und Variablen der Automation werden
+  automatisch als Eingaben des Skripts angelegt und beim Aufruf übergeben; das Skript läuft im Modus
+  „parallel“, damit mehrere Automationen es gleichzeitig nutzen können.
 - **🔎 Suche im Werkzeugkasten**, **Suche im Arbeitsbereich** (Strg+F), **⤢ Alles zeigen**.
 - **Kopieren zwischen Automationen** (Rechtsklick → kopieren / einfügen, auch Strg+C/V über Automationen hinweg).
 - **🎒 Rucksack** (oben rechts): Lieblings-Bausteine für alle Automationen, in HA gespeichert.
