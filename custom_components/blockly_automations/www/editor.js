@@ -752,7 +752,7 @@
       // Dienst gewechselt: Block mit den Feldern des neuen Dienstes neu aufbauen.
       if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "field" && !S.busy) {
         const b = S.ws.getBlockById(e.blockId);
-        if (b && b.serviceField_ === e.name && HAB.hooks.serviceFields(e.newValue)) {
+        if (b && b.serviceField_ === e.name && (HAB.hooks.serviceFields(e.newValue) || b.getField("SVCSEL"))) {
           setTimeout(() => { if (!b.isDisposed()) replaceBlock(b, HAB.blockToItem(b)); }, 0);
         }
       }

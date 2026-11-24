@@ -404,7 +404,7 @@
       else if (isObj(a.data)) fields.push(F("data", "Daten (JSON)", { type: "json" }));
       fields.push(P("data_template", "Daten (alt)", { type: "json" }));
       fields.push(P("response_variable", "Antwort in Variable"));
-      return mk(serviceTitle(svc), fields);
+      return { ...mk(serviceTitle(svc), fields), svc: typeof svc === "string" ? svc : undefined };
     }
     if ("event" in a) return mk("📣 Ereignis senden", [F("event", "Typ"), F("event_data", "Daten (JSON)", { type: "json" })]);
     if ("scene" in a) return mk("🎬 Szene aktivieren", [F("scene", "", { type: "entity", domains: ["scene"] })]);
@@ -432,6 +432,26 @@
     media_player: "Medienplayer", notify: "Nachricht", scene: "Szene", script: "Skript", automation: "Automation", homeassistant: "Gerät",
     input_boolean: "Schalter-Helfer", input_number: "Zahlen-Helfer", input_select: "Auswahl-Helfer", input_text: "Text-Helfer",
     input_button: "Taster-Helfer", counter: "Zähler", timer: "Timer", vacuum: "Staubsauger", persistent_notification: "Hinweis" };
+  // Andere Dienste desselben Bereichs (für die Auswahl im Kopf), null wenn es keine Auswahl gibt.
+  const NO_CHOICE = new Set(["script", "notify", "scene", "tts"]);
+  function serviceChoices(svc) {
+    const d = svc.split(".")[0];
+    if (!d || NO_CHOICE.has(d)) return null;
+    let list = [];
+    try { list = (hooks.services() || []).map((x) => (Array.isArray(x) ? x : [x, ""])).filter(([id]) => typeof id === "string" && id.startsWith(d + ".")); } catch (e) { list = []; }
+    if (!list.some(([id]) => id === svc)) list.push([svc, ""]);
+    if (list.length < 2) return null;
+    const word = ([id, name]) => {
+      const s = id.slice(d.length + 1);
+      if (SVC_WORDS[s]) return SVC_WORDS[s];
+      let n = "";
+      try { n = String(hooks.serviceName(id) || name || "").replace(/^·\s*/, ""); } catch (e) { n = ""; }
+      return n || s.replace(/_/g, " ");
+    };
+    const order = ["turn_on", "turn_off", "toggle"];
+    const rank = (id) => { const i = order.indexOf(id.slice(d.length + 1)); return i < 0 ? 9 : i; };
+    return list.sort((a, b) => rank(a[0]) - rank(b[0]) || word(a).localeCompare(word(b), "de")).map((x) => [word(x), x[0]]);
+  }
   function serviceTitle(svc) {
     if (typeof svc !== "string" || !svc.includes(".")) return "▶️ Dienst aufrufen";
     const [d, s] = svc.split(".");
@@ -925,7 +945,20 @@
         this.chips_ = chips;
         this.setColour(spec.colour);
         const head = this.appendDummyInput("HEAD");
-        head.appendField(spec.title, "TITLE");
+        // Dienst-Baustein: ein Baustein pro Gerätetyp, die Tätigkeit wählt man im Kopf („💡 Licht [einschalten ▾]“).
+        const svcOpts = spec.svc && !hooks.simple ? serviceChoices(spec.svc) : null;
+        if (svcOpts) {
+          const block = this;
+          const d = spec.svc.split(".")[0];
+          head.appendField(`${DOMAIN_ICON[d] || "▶️"} ${DOMAIN_DE[d] || hooks.domainName(d) || d}`, "TITLE");
+          const dd = new Blockly.FieldDropdown(svcOpts);
+          dd.setValue(spec.svc);
+          dd.setValidator((nv) => {
+            if (block.serviceField_ && nv !== block.getFieldValue(block.serviceField_)) setTimeout(() => { if (!block.isDisposed()) block.setFieldValue(nv, block.serviceField_); }, 0);
+            return nv;
+          });
+          head.appendField(dd, "SVCSEL");
+        } else head.appendField(spec.title, "TITLE");
         if (hooks.openEditor && nativeEditable(this.haKind_, raw)) {
           const block = this;
           head.appendField(new Blockly.FieldImage(GEAR, 16, 16, "Eigenschaften", () => hooks.openEditor(block)), "GEAR");
@@ -1026,7 +1059,7 @@
             const dn = (x) => (typeof x === "string" && x.includes(".") ? "· " + (hooks.domainName(x.split(".")[0]) || "") : "");
             const lbl = new Blockly.FieldLabel(dn(str), "ha-entity-name");
             inp.appendField(lbl, "N" + i);
-            fld.setValidator((nv) => { lbl.setValue(dn(nv)); if (block.getField("TITLE")) block.setFieldValue(serviceTitle(nv), "TITLE"); return nv; });
+            fld.setValidator((nv) => { lbl.setValue(dn(nv)); if (block.getField("TITLE") && !block.getField("SVCSEL")) block.setFieldValue(serviceTitle(nv), "TITLE"); return nv; });
           }
         });
         // Skript-Eingaben (fields) im einfachen Modus als anklickbarer Wert.
@@ -1202,10 +1235,8 @@
       return items.some((x) => x.kind === "block") ? cat(name, C.action, items) : null;
     };
     const dom = (d) => services.filter((x) => typeof x === "string" && x.startsWith(d + "."));
-    const svcsOf = (d, first, extra = {}) => {
-      const rest = dom(d).filter((x) => !first.includes(x)).sort();
-      return [...first.map((x) => svc(x, extra[x])), ...(rest.length ? [label("weitere"), ...rest.map((x) => svc(x))] : [])];
-    };
+    // Ein Baustein pro Gerätetyp – ein/aus/umschalten usw. wählt man im Kopf des Bausteins.
+    const one = (s, extra) => svc(s, extra);
     const actionCats = [
       cat("Allgemein", C.action, [
         btn("＋ Aktion nach Typ wählen …", "type_action"),
@@ -1215,16 +1246,12 @@
         tb("action", { event: "", event_data: {} }),
         ...(hooks.blockly ? [label("Gerät"), tb("action", { device_id: "" })] : []),
       ]),
-      svcCat("Licht", svcsOf("light", ["light.turn_on", "light.turn_off", "light.toggle"])),
-      svcCat("Schalter & Steckdosen", [...svcsOf("switch", ["switch.turn_on", "switch.turn_off", "switch.toggle"]),
-        label("Alles, was sich schalten lässt"), svc("homeassistant.turn_on"), svc("homeassistant.turn_off"), svc("homeassistant.toggle")]),
-      svcCat("Heizung & Klima", [...svcsOf("climate", ["climate.set_temperature", "climate.set_hvac_mode"],
-        { "climate.set_temperature": { data: { temperature: 20 } }, "climate.set_hvac_mode": { data: { hvac_mode: "heat" } } }),
-        ...(dom("fan").length ? [label("Ventilator"), ...dom("fan").sort().map((x) => svc(x))] : [])]),
-      svcCat("Rollläden & Tore", svcsOf("cover", ["cover.open_cover", "cover.close_cover", "cover.stop_cover"])),
-      svcCat("Schlösser", svcsOf("lock", ["lock.lock", "lock.unlock"])),
-      svcCat("Medien", svcsOf("media_player", ["media_player.media_play", "media_player.media_pause", "media_player.volume_set"],
-        { "media_player.volume_set": { data: { volume_level: 0.3 } } })),
+      svcCat("Licht", [one("light.turn_on")]),
+      svcCat("Schalter & Steckdosen", [one("switch.turn_on"), label("Alles, was sich schalten lässt"), one("homeassistant.turn_on")]),
+      svcCat("Heizung & Klima", [one("climate.set_temperature", { data: { temperature: 20 } }), ...(dom("fan").length ? [one("fan.turn_on")] : [])]),
+      svcCat("Rollläden & Tore", [one("cover.open_cover")]),
+      svcCat("Schlösser", [one("lock.lock")]),
+      svcCat("Medien", [one("media_player.media_play")]),
       svcCat("Benachrichtigen", [
         ...notifyServices.map((x) => tb("action", { action: x, data: { title: "", message: "" } })),
         tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
@@ -1232,15 +1259,15 @@
         ...(has("logbook.log") ? [tb("action", { action: "logbook.log", data: { name: "", message: "" } })] : []),
       ]),
       svcCat("Helfer", [
-        svc("input_boolean.turn_on"), svc("input_boolean.turn_off"), svc("input_boolean.toggle"),
-        svc("input_number.set_value", { data: { value: 0 } }),
-        svc("input_select.select_option", { data: { option: "" } }),
-        svc("input_text.set_value", { data: { value: "" } }),
-        svc("input_button.press"),
-        svc("counter.increment"), svc("counter.reset"),
-        svc("timer.start"), svc("timer.cancel"),
+        one("input_boolean.turn_on"),
+        one("input_number.set_value", { data: { value: 0 } }),
+        one("input_select.select_option", { data: { option: "" } }),
+        one("input_text.set_value", { data: { value: "" } }),
+        one("input_button.press"),
+        one("counter.increment"),
+        one("timer.start"),
       ]),
-      svcCat("Automationen & Skripte", [svc("automation.trigger"), svc("automation.turn_on"), svc("automation.turn_off"), svc("script.turn_on")]),
+      svcCat("Automationen & Skripte", [one("automation.trigger"), one("script.turn_on")]),
     ].filter(Boolean);
 
     return forKind({
@@ -1304,21 +1331,14 @@
           tb("action", { repeat: { until: [], sequence: [] } }),
           tb("action", { repeat: { for_each: [], sequence: [] } }),
           label("Wert in der Schleife"),
-          V("var", { v: "repeat.index" }), V("var", { v: "repeat.item" }),
+          V("var", { v: "repeat.index" }),
         ]),
         cat("Zeit", C.flow, [
           label("Warten"),
           tb("action", { delay: { hours: 0, minutes: 1, seconds: 0 } }),
           tb("action", { wait_template: "", timeout: { minutes: 5 }, continue_on_timeout: true }),
           tb("action", { wait_for_trigger: [], timeout: { minutes: 5 } }),
-          label("Zeitpunkt als Auslöser"),
-          tb("trigger", { trigger: "time", at: "07:00:00" }),
-          tb("trigger", { trigger: "time_pattern", minutes: "/5" }),
-          tb("trigger", { trigger: "sun", event: "sunset", offset: "00:00:00" }),
-          label("Nur zu bestimmten Zeiten"),
-          tb("condition", { condition: "time", after: "08:00:00", before: "22:00:00" }),
-          tb("condition", { condition: "time", weekday: ["sat", "sun"] }),
-          tb("condition", { condition: "sun", after: "sunset" }),
+          label("Uhrzeit-Auslöser und Zeitfenster stehen unter „Auslöser“ und „Bedingungen“."),
           label("Aktuelle Zeit als Wert"),
           V("now"), V("now", { w: "now().hour" }), V("now", { w: "now().weekday()" }),
         ]),
@@ -1326,16 +1346,12 @@
           V("num"),
           V("math", { op: "+" }, { A: sh("num", { n: 1 }), B: sh("num", { n: 1 }) }),
           V("math", { op: "*" }, { A: sh("statenum"), B: sh("num", { n: 2 }) }),
-          V("round", { n: 1 }), V("tonum"), V("statenum"),
-          V("cmp", { op: ">" }, { A: sh("statenum"), B: sh("num", { n: 20 }) }),
+          V("round", { n: 1 }), V("tonum"),
         ]),
         cat("Text", 160, [
           V("txt"),
           V("join", null, { A: sh("txt", { s: "Temperatur: " }), B: sh("state") }),
           V("totext"),
-          label("Text verschicken"),
-          tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
-          ...notifyServices.slice(0, 3).map((x) => tb("action", { action: x, data: { message: "" } })),
         ]),
         cat("Werte aus HA", 30, [
           V("state"), V("statenum"), V("attr"), V("isstate"),
@@ -1988,7 +2004,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { serviceTitle, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

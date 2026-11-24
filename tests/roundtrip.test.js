@@ -388,6 +388,18 @@ ok("dienst-titel", () => {
     assert.strictEqual(HAB.serviceTitle("light.turn_on"), "💡 Leuchte einschalten");
     assert.ok(HAB.serviceTitle("switch.turn_off").startsWith("🔌 ") && HAB.serviceTitle("switch.turn_off").endsWith("ausschalten"));
     assert.strictEqual(HAB.serviceTitle(""), "▶️ Dienst aufrufen");
+    const prevS = HAB.hooks.services;
+    HAB.hooks.services = () => [["light.toggle", ""], ["light.turn_off", ""], ["light.turn_on", ""], ["switch.turn_on", ""], ["script.a", ""]];
+    try {
+      assert.deepStrictEqual(HAB.serviceChoices("light.turn_off").map((x) => x[1]), ["light.turn_on", "light.turn_off", "light.toggle"]);
+      assert.strictEqual(HAB.serviceChoices("light.turn_on")[1][0], "ausschalten");
+      assert.strictEqual(HAB.serviceChoices("script.a"), null);
+      // Dienst-Baustein mit Auswahl im Kopf: Rundlauf bleibt verlustfrei, Wechsel ändert den Dienst.
+      const act = { action: "light.turn_on", target: { entity_id: "light.a" } };
+      const b = toBlocks(act, "action");
+      assert.ok(b.getField("SVCSEL"));
+      assert.deepStrictEqual(HAB.blockToItem(b), act);
+    } finally { HAB.hooks.services = prevS; }
   } finally { HAB.hooks.serviceName = prev; }
 });
 
