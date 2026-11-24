@@ -175,3 +175,18 @@ body.expert #expert { background: var(--accent); color: #fff; border-color: var(
 .hab-pfoot span { flex: 1; font-size: 11px; color: #757575; }
 .hab-pfoot button { font: inherit; padding: 3px 10px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #212121; cursor: pointer; }
 .hab-pfoot button.primary { background: #03a9f4; color: #fff; border-color: #03a9f4; }
+
+/* Suche im Arbeitsbereich */
+.find { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30; display: flex; gap: 6px; align-items: center; background: var(--bar);
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.find.hidden { display: none; }
+.find input { width: 240px; }
+/* Mehrfachauswahl */
+.hab-multi > .blocklyPath { stroke: #2979ff !important; stroke-width: 4px !important; stroke-dasharray: 3 3; }
+/* Eingabefenster */
+.askBox { width: min(420px, 100%); }
+.askBody { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+.askBody input { width: 100%; }
+.askFoot { display: flex; gap: 8px; justify-content: flex-end; }
+/* YAML-Ansicht im Inspektor */
+details.yaml summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-top: 6px; }

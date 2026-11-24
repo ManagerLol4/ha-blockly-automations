@@ -44,6 +44,25 @@ Editor) wählst du die **Bedienung**:
 
 Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
 
+### Im Blockly-Modus zusätzlich
+
+- **Werte & Logik:** Bausteine wie *Zustand von …*, *Zahl von …*, *Attribut*, *Auslöser: neuer Zustand*,
+  *Variable*, *jetzt*, Vergleichen (=, ≠, <, >), *und/oder/nicht*, Rechnen, Runden, Text verbinden,
+  *wenn … dann … sonst*. Sie stecken in Datenfeldern (z. B. Nachricht, Helligkeit), Variablen und in der
+  **Bedingung aus Logik-Bausteinen**. Beim Speichern wird daraus ein normales Jinja-Template; ein
+  unsichtbarer Kommentar `{#hab:…#}` merkt sich die Bausteine. Von Hand geänderte Templates bleiben Text.
+- **Variablen:** „＋ Variable“ in *Variablen setzen*; *Variable*-Baustein mit Auswahl der vorhandenen Namen.
+- **＋ sonst wenn …** am *Wenn*-Baustein (wird dabei zur Auswahl mit mehreren Zweigen).
+- **Als neues Skript auslagern** (Rechtsklick auf einen Schritt): legt das Skript an und setzt den Aufruf ein.
+- **🔎 Suche im Werkzeugkasten**, **Suche im Arbeitsbereich** (Strg+F), **⤢ Alles zeigen**.
+- **Kopieren zwischen Automationen** (Rechtsklick → kopieren / einfügen, auch Strg+C/V über Automationen hinweg).
+- **🎒 Rucksack** (oben rechts): Lieblings-Bausteine für alle Automationen, in HA gespeichert.
+- **Mehrfachauswahl:** Shift+Klick markiert mehrere Bausteine; Rechtsklick → alle deaktivieren, aktivieren,
+  einklappen, löschen oder in den Rucksack.
+- **🗒 Notizen** (Rechtsklick auf freie Fläche) – gespeichert mit der Darstellung, nicht in der Automation.
+- **YAML-Ansicht** des gewählten Bausteins im Inspektor (🔍).
+- Eingaben (Namen, neue Skripte, Kategorien) über ein eigenes Fenster – funktioniert auch in der HA-App.
+
 Aufbau wie der Blockly-Skripteditor in ioBroker: links die Liste, rechts die Bausteine.
 
 1. **Liste links:** Ordner = HA-Kategorien, mit Suche und Ein/Aus-Schalter. Automationen mit der
