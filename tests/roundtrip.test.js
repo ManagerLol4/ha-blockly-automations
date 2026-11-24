@@ -444,6 +444,47 @@ ok("version-b-variablen", () => {
   assert.deepStrictEqual(HAB.blockToItem(b), c);
 });
 
+// 20d) Version B: Funktionen (Skript mit Rückgabe), Aufruf mit Ergebnis.
+ok("version-b-funktionen", () => {
+  HAB.hooks.extended = true;
+  try {
+    const HAV = HAB.HAV;
+    const ret = HAB.RETURN(HAV.compile({ k: "math", f: { op: "*" }, a: [{ k: "var", f: { v: "stufe" } }, { k: "num", f: { n: 10 } }] }));
+    const fn = { alias: "Helligkeit", fields: { stufe: { name: "stufe", selector: { text: {} } } }, sequence: [{ delay: 1 }, ret], mode: "parallel" };
+    const r = toBlocks(fn, "script");
+    assert.deepStrictEqual(HAB.blockToItem(r), fn);
+    const rb = toBlocks(ret, "action");
+    assert.ok(rb.getFieldValue("TITLE").includes("gib zurück"));
+    assert.ok(rb.inputList.some((i) => i.connection && i.connection.targetBlock() && i.connection.targetBlock().type === "ha_v_math"));
+    // Wert ändern bleibt in der Form
+    const rb2 = toBlocks(HAB.RETURN(5), "action");
+    const m = rb2.fieldMap_.find((x) => x.path.endsWith("wert"));
+    rb2.setFieldValue("7", m.name);
+    assert.deepStrictEqual(HAB.blockToItem(rb2), HAB.RETURN(7));
+    // Leere Funktion aus dem Knopf: verlustfrei
+    const nf = HAB.NEW_FUNCTION("Test", ["raum", "stufe"]);
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(nf, "script")), nf);
+    // Aufruf: Titel „Funktion“, Ergebnis-Feld immer da
+    const call = { action: "script.helligkeit", data: { stufe: 3 }, response_variable: "ergebnis" };
+    const cb = toBlocks(call, "action");
+    assert.ok(cb.getFieldValue("TITLE").startsWith("ƒ Funktion"));
+    assert.deepStrictEqual(HAB.blockToItem(cb), call);
+    assert.strictEqual(HAV.expr({ k: "fres", f: { v: "ergebnis" } }), "ergebnis.wert");
+    // Version A: dieselbe Folge ist eine normale Folge
+    HAB.hooks.extended = false;
+    assert.ok(!toBlocks(ret, "action").getFieldValue("TITLE").includes("gib zurück"));
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(fn, "script")), fn);
+    HAB.hooks.extended = true;
+    // Werkzeugkasten: alle Bausteine verlustfrei
+    const walk = (c) => (c.contents || []).flatMap((x) => (x.kind === "category" ? walk(x) : [x]));
+    const box = HAB.buildToolbox("root");
+    assert.ok(walk(box).some((x) => x.callbackKey === "newFunction"));
+    for (const item of walk(box).filter((x) => x.kind === "block" && x.extraState)) {
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(item.extraState.raw, item.type.slice(3))), item.extraState.raw);
+    }
+  } finally { HAB.hooks.extended = false; }
+});
+
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
 ok("wert-bausteine", () => {
   const HAV = HAB.HAV;

@@ -47,10 +47,16 @@ Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
 ### Version A oder B (Einstellung „Bausteine“)
 
 - **Version A (Standard):** Bausteine zeigen genau das, was in der HA-Automation steht.
-- **Version B:** zusätzlich Bausteine wie bei ioBroker. Bisher: **globale Variablen**. Unter
-  *Variablen → ＋ Neue globale Variable anlegen …* legt Blockly einen Helfer an (Zahl, Text oder
-  Wahr/Falsch). Er behält seinen Wert auch nach einem Neustart. Dazu gibt es die Bausteine
-  *setze Zahl-/Text-/Wahr/Falsch-Variable … auf …* und *globale Variable* zum Lesen.
+- **Version B:** zusätzlich Bausteine wie bei ioBroker:
+  - **Globale Variablen:** Unter
+    *Variablen → ＋ Neue globale Variable anlegen …* legt Blockly einen Helfer an (Zahl, Text oder
+    Wahr/Falsch). Er behält seinen Wert auch nach einem Neustart. Dazu gibt es die Bausteine
+    *setze Zahl-/Text-/Wahr/Falsch-Variable … auf …* und *globale Variable* zum Lesen.
+  - **Funktionen mit Rückgabewert** (Kategorie *Skripte (Funktionen)*): *＋ Neue Funktion anlegen …* fragt
+    Name und Parameter und legt ein Skript an (Eingaben = Parameter, Modus *parallel*). Mit *↩️ gib zurück …*
+    liefert die Funktion einen Wert. Beim Aufruf (*ƒ Funktion: …*) landet das Ergebnis in einer Variable,
+    gelesen wird es mit *Ergebnis von …*. In HA ist das ein Skript mit `fields`, `stop` +
+    `response_variable` und ein Aufruf mit `response_variable` (Ergebnis unter `ergebnis.wert`).
 
 Auch Version B speichert nur normale HA-Automationen und Helfer. Beim Zurückwechseln auf A läuft alles
 weiter, die Bausteine erscheinen dann als normale Dienstaufrufe (z. B. *Zahlen-Helfer Wert setzen*).

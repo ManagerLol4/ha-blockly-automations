@@ -770,6 +770,7 @@
     };
     S.ws.registerButtonCallback("newScript", () => newScript());
     S.ws.registerButtonCallback("newGlobalVar", () => newGlobalVar());
+    S.ws.registerButtonCallback("newFunction", () => newFunction());
     S.ws.registerButtonCallback("addTrigger", rootAdd(0, "trigger"));
     S.ws.registerButtonCallback("addCondition", rootAdd(1, "condition"));
     S.ws.registerButtonCallback("addAction", rootAdd(2, "action"));
@@ -1305,6 +1306,23 @@
   }
   const slugify = (name) => name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "skript";
+  // Version B: Funktion = Skript mit Parametern (fields) und „gib zurück“. Läuft parallel, damit mehrere Aufrufe gleichzeitig gehen.
+  async function newFunction() {
+    const name = ((await askText("Name der neuen Funktion", "", "z. B. „Helligkeit berechnen“")) || "").trim();
+    if (!name) return;
+    const ps = await askText("Parameter (Eingaben)", "", "Namen mit Komma trennen, z. B. „raum, stufe“. Leer lassen für keine.");
+    if (ps === null) return;
+    const params = [...new Set(ps.split(",").map((p) => slugify(p.trim())).filter(Boolean))];
+    if (S.kind !== "script") { if (!switchKind("script", false)) return; }
+    else if (!confirmDiscard()) return;
+    const base = slugify(name);
+    const taken = new Set(itemList("script").map((a) => a.id));
+    let id = base;
+    for (let i = 2; taken.has(id) || S.hass.states["script." + id]; i++) id = `${base}_${i}`;
+    newItem(() => HAB.NEW_FUNCTION(name, params), id);
+    status(`ƒ Neue Funktion „${name}“ (script.${id}) – Schritte vor „gib zurück“ einfügen, dann speichern`, "ok");
+  }
+
   async function newScript() {
     const name = ((await askText("Name des neuen Skripts (Funktion)", "Neues Skript")) || "").trim();
     if (!name) return;

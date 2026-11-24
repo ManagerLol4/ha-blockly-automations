@@ -19,7 +19,7 @@
     if (!path) return obj;
     let cur = obj;
     for (const k of path.split(".")) {
-      if (!isObj(cur)) return undefined;
+      if (!isObj(cur) && !Array.isArray(cur)) return undefined;
       cur = cur[k];
     }
     return cur;
@@ -28,7 +28,7 @@
     const keys = path.split(".");
     let cur = obj;
     for (let i = 0; i < keys.length - 1; i++) {
-      if (!isObj(cur[keys[i]])) cur[keys[i]] = {};
+      if (!isObj(cur[keys[i]]) && !Array.isArray(cur[keys[i]])) cur[keys[i]] = {};
       cur = cur[keys[i]];
     }
     cur[keys[keys.length - 1]] = val;
@@ -103,7 +103,7 @@
   };
 
   // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
-  const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count)$/;
+  const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count|sequence\.0\.variables\.funktion_ergebnis\.wert)$/;
   const valuesOn = () => !!(hooks.blockly || hooks.expert || hooks.extended);
   const valueSlot = (f) => valuesOn() && !f.row && !f.dur && ["text", "template", "number"].includes(f.type) && VALUE_PATH.test(f.path);
 
@@ -370,6 +370,7 @@
       return mk("🔁 Wiederholen", fields, lists, C.flow);
     }
     if ("parallel" in a) return mk("⏸ Parallel ausführen", [], [L("parallel", "", "action")], C.flow);
+    if (isReturn(a)) return mk("↩️ gib zurück", [F(RET_PATH, "", { type: "text" })], [], C.script);
     if ("sequence" in a) return mk("📜 Folge", [], [L("sequence", "", "action")], C.flow);
     if ("wait_for_trigger" in a)
       return mk("⏳ Warten auf Auslöser", [...duration(a, "timeout", "höchstens", "present"), P("continue_on_timeout", "danach weiter", { type: "bool" })],
@@ -411,8 +412,10 @@
       if (typeof svc === "string") fields.push(...serviceDataFields(a, svc));
       else if (isObj(a.data)) fields.push(F("data", "Daten (JSON)", { type: "json" }));
       fields.push(P("data_template", "Daten (alt)", { type: "json" }));
-      fields.push(P("response_variable", "Antwort in Variable"));
-      return { ...mk(serviceTitle(svc), fields), svc: typeof svc === "string" ? svc : undefined };
+      const fn = isFunctionCall(svc);
+      fields.push(fn ? F("response_variable", "Ergebnis in Variable", { show: "always" }) : P("response_variable", "Antwort in Variable"));
+      const title = fn ? `ƒ Funktion: ${serviceTitle(svc).replace(/^\S+\s/, "")}` : serviceTitle(svc);
+      return { ...mk(title, fields), svc: typeof svc === "string" && !fn ? svc : undefined };
     }
     if ("event" in a) return mk("📣 Ereignis senden", [F("event", "Typ"), F("event_data", "Daten (JSON)", { type: "json" })]);
     if ("scene" in a) return mk("🎬 Szene aktivieren", [F("scene", "", { type: "entity", domains: ["scene"] })]);
@@ -466,10 +469,33 @@
     const icon = DOMAIN_ICON[d] || "▶️";
     let n = "";
     try { n = String(hooks.serviceName(svc) || "").replace(/^·\s*/, ""); } catch (e) { n = ""; }
-    if (!n && d === "script") { try { n = String(hooks.entityName(svc) || ""); } catch (e) { n = ""; } }
+    if (!n && d === "script") { try { n = String(hooks.entityName(svc) || "").replace(/^·\s*/, ""); } catch (e) { n = ""; } }
     if (!n) n = `${DOMAIN_DE[d] || hooks.domainName(d) || d} ${SVC_WORDS[s] || s.replace(/_/g, " ")}`;
     return `${icon} ${n}`;
   }
+
+  /* Version B: Funktionen = Skripte mit Eingaben (fields) und Rückgabewert.
+   * „gib zurück X“ ist in HA eine Folge aus zwei Schritten:
+   *   sequence: [ { variables: { funktion_ergebnis: { wert: X } } }, { stop: "Rückgabe", response_variable: funktion_ergebnis } ]
+   * Der Aufruf speichert das Ergebnis in einer Variable; gelesen wird es mit „Ergebnis von …“ ({{ ergebnis.wert }}). */
+  const RET_PATH = "sequence.0.variables.funktion_ergebnis.wert";
+  const RETURN = (value = "") => ({ sequence: [{ variables: { funktion_ergebnis: { wert: value } } }, { stop: "Rückgabe", response_variable: "funktion_ergebnis" }] });
+  function isReturn(a) {
+    if (!hooks.extended || !isObj(a) || Object.keys(a).some((k) => !["sequence", "alias", "enabled"].includes(k))) return false;
+    const s = a.sequence;
+    if (!Array.isArray(s) || s.length !== 2) return false;
+    const [v, st] = s;
+    return isObj(v) && Object.keys(v).join() === "variables" && isObj(v.variables) && Object.keys(v.variables).join() === "funktion_ergebnis"
+      && isObj(v.variables.funktion_ergebnis) && Object.keys(v.variables.funktion_ergebnis).join() === "wert" && isPrim(v.variables.funktion_ergebnis.wert)
+      && isObj(st) && Object.keys(st).sort().join() === "response_variable,stop" && st.response_variable === "funktion_ergebnis" && typeof st.stop === "string";
+  }
+  const SCRIPT_SERVICES = new Set(["turn_on", "turn_off", "toggle", "reload"]);
+  const isFunctionCall = (svc) => !!hooks.extended && typeof svc === "string" && svc.startsWith("script.") && !SCRIPT_SERVICES.has(svc.slice(7));
+  const NEW_FUNCTION = (alias, params = []) => ({
+    alias, description: "Funktion (Blockly): Eingaben über „Parameter“, Ergebnis mit „gib zurück“.",
+    fields: Object.fromEntries(params.map((p) => [p, { name: p, selector: { text: {} } }])),
+    sequence: [RETURN("")], mode: "parallel",
+  });
 
   // Version B: Ist diese Aktion „globale Variable setzen“? Nur die einfache Form ohne weitere Angaben.
   const GVAR_SET = { "input_number.set_value": "input_number", "input_text.set_value": "input_text", "input_boolean.turn_on": "input_boolean", "input_boolean.turn_off": "input_boolean" };
@@ -1201,9 +1227,17 @@
     const btn = (text, callbackKey) => ({ kind: "button", text, callbackKey });
     // Skripte = eigene Funktionen: als Aufruf-Baustein; ihre Eingaben kommen aus dem Dienst-Schema.
     const scriptCat = { kind: "category", name: "Skripte (Funktionen)", colour: String(C.script), contents: [
-      btn("＋ Neues Skript anlegen …", "newScript"),
-      label("Ein Skript bündelt Schritte, die mehrere Automationen nutzen:"),
-      ...hooks.scripts().filter(([id]) => typeof id === "string" && id.startsWith("script.")).map(([id]) => tb("action", { action: id })),
+      ...(hooks.extended ? [
+        btn("＋ Neue Funktion anlegen …", "newFunction"),
+        label("In einer Funktion: Ergebnis zurückgeben, Parameter lesen"),
+        tb("action", RETURN(0)),
+        HAV.tbBlock("var", { v: "" }),
+        label("Nach dem Aufruf: Ergebnis lesen (Name wie bei „Ergebnis in Variable“)"),
+        HAV.tbBlock("fres", { v: "ergebnis" }),
+        label("Funktionen aufrufen:"),
+      ] : [btn("＋ Neues Skript anlegen …", "newScript"),
+        label("Ein Skript bündelt Schritte, die mehrere Automationen nutzen:")]),
+      ...hooks.scripts().filter(([id]) => typeof id === "string" && id.startsWith("script.")).map(([id]) => tb("action", hooks.extended ? { action: id, response_variable: "ergebnis" } : { action: id })),
     ] };
     const forKind = (box) => {
       if (kind === "script") box.contents = box.contents.filter((c) => c.colour !== String(C.trigger));
@@ -2038,7 +2072,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { RETURN, NEW_FUNCTION, isReturn, serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

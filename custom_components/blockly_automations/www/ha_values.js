@@ -35,6 +35,7 @@
       ["alter Zustand", "trigger.from_state.state"], ["Entität", "trigger.entity_id"], ["Name", "trigger.to_state.name"]]]], j: (f) => f.w },
     gvar: { c: 330, parts: [["t", "globale Variable"], ["f", "e", "entity", "", null, { domains: ["input_number", "input_text", "input_boolean"] }]],
       j: (f) => { const d = String(f.e || "").split(".")[0]; return d === "input_number" ? `states(${q(f.e)}) | float(0)` : d === "input_boolean" ? `is_state(${q(f.e)}, 'on')` : `states(${q(f.e)})`; } },
+    fres: { c: 290, parts: [["t", "Ergebnis von"], ["f", "v", "variable", "ergebnis"]], j: (f) => (IDENT.test(f.v || "") ? `${f.v}.wert` : "none") },
     var: { c: 330, parts: [["t", "Variable"], ["f", "v", "variable", ""]], j: (f) => (IDENT.test(f.v || "") ? f.v : "none") },
     now: { c: 30, parts: [["t", "jetzt:"], ["f", "w", "dd", "now().strftime('%H:%M')", [["Uhrzeit", "now().strftime('%H:%M')"], ["Stunde", "now().hour"],
       ["Minute", "now().minute"], ["Wochentag (0 = Mo)", "now().weekday()"], ["Datum", "now().strftime('%d.%m.%Y')"]]]], j: (f) => f.w },
