@@ -1,0 +1,6 @@
+Blockly Automations für Home Assistant
+Copyright (c) 2026 ManagerLol4 and contributors – MIT License, siehe LICENSE.
+
+Dieses Projekt enthält Blockly (custom_components/blockly_automations/www/vendor),
+Copyright Google LLC / Raspberry Pi Foundation, lizenziert unter der Apache License 2.0,
+siehe custom_components/blockly_automations/www/vendor/BLOCKLY_LICENSE.txt.
