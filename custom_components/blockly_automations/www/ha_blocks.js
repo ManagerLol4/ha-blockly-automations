@@ -98,6 +98,8 @@
     extractScript: null,         // (block, alle folgenden?) -> Schritte als neues Skript auslagern
     entityExists: () => null,    // (entity_id) -> true/false, null = unbekannt (Prüfregel „gibt es nicht“)
     entityIds: () => [],         // () -> alle entity_ids (für Korrekturvorschläge)
+    changeType: null,            // (block) -> Typ eines Bausteins ändern (Auswahl nach Typ)
+    captureScene: null,          // (block) -> Szene: Zustand von jetzt übernehmen (eine Entität oder alle)
   };
 
   // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
@@ -140,9 +142,9 @@
   }
 
   // ---------- Farben ----------
-  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290 };
+  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290, scene: 330 };
   const NONE = "__ha_none__";
-  const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen" };
+  const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen", sceneent: "＋ Entität hinzufügen" };
   const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#fff" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64z"/></svg>');
   const UNIT = { days: "Tg", hours: "Std", minutes: "Min", seconds: "Sek", milliseconds: "ms" };
@@ -156,7 +158,9 @@
    *   row:  Felder mit gleichem row-Wert stehen in einer Zeile
    */
   const F = (path, label, o = {}) => ({ path, label, show: "always", type: "text", ...o });
-  const L = (path, label, kind) => ({ path, label, kind });
+  const L = (path, label, kind, o = {}) => ({ path, label, kind, ...o });
+  // Listen aus einem Objekt (Szene: entities = {entity_id: zustand}) als Liste von {__e, __v}.
+  const listArr = (l, v) => (l.dict ? (isObj(v) ? Object.entries(v).map(([k, x]) => ({ __e: k, __v: x })) : []) : Array.isArray(v) ? v : [v]);
   const P = (path, label, o = {}) => F(path, label, { show: "present", ...o });
 
   // Zeitraum (for/delay/timeout/offset): Objekt -> eine Zeile Std/Min/Sek, String -> Textfeld.
@@ -384,12 +388,13 @@
       const fields = [F(key, "Dienst", { type: "service" })];
       const domains = anyDomain || !dom ? undefined : [dom];
       if (a.entity_id !== undefined) fields.push(F("entity_id", "Entität", { type: "entity", domains }));
+      else if (typeof a.target === "string") fields.push(F("target", "Ziel", { type: "entity" })); // z. B. Blueprint-Eingabe
       else {
         const hasTarget = typeof svc === "string" ? hooks.serviceTarget(svc) : null;
         fields.push(F("target.entity_id", "Entität", { type: "entity", domains, show: hasTarget === false ? "present" : "always" }));
       }
       // Im Blockly-Modus sind Bereich und Gerät immer wählbar; sonst nur, wenn gesetzt.
-      const tShow = hooks.blockly && (hasTargetFor(a, key) !== false) ? "always" : "present";
+      const tShow = hooks.blockly && typeof a.target !== "string" && (hasTargetFor(a, key) !== false) ? "always" : "present";
       fields.push(F("target.area_id", "Bereich", { type: "area", show: tShow }));
       fields.push(F("target.device_id", "Gerät", { type: "device", show: tShow }));
       fields.push(P("target.floor_id", "Etage", { type: "floor" }));
@@ -464,8 +469,27 @@
     };
   }
 
+  // Szene: Name, Symbol und Entitäten mit ihrem Zielzustand.
+  function sceneSpec(cfg) {
+    return { title: "🎬 Szene", colour: C.scene, fields: [F("name", "Name"), P("icon", "Symbol")], lists: [L("entities", "ENTITÄTEN", "sceneent", { dict: true })] };
+  }
+  const SCENE_ATTRS = ["brightness", "color_temp_kelvin", "color_temp", "hs_color", "rgb_color", "xy_color", "color_mode", "effect",
+    "position", "current_position", "tilt_position", "current_tilt_position", "temperature", "target_temp_low", "target_temp_high",
+    "hvac_mode", "preset_mode", "fan_mode", "percentage", "oscillating", "direction", "volume_level", "is_volume_muted", "source", "value", "option"];
+  function sceneEntSpec(it) {
+    const v = isObj(it) ? it.__v : undefined;
+    const fields = [F("__e", "Entität", { type: "entity" })];
+    if (isObj(v)) {
+      fields.push(F("__v.state", "Zustand", { type: "state", of: "__e" }));
+      for (const k of Object.keys(v)) if (k !== "state") fields.push(F(`__v.${k}`, k, { type: isPrim(v[k]) ? "text" : "json" }));
+    } else fields.push(F("__v", "Zustand", { type: "state", of: "__e" }));
+    return { title: "💡 Entität", colour: C.scene, fields, lists: [] };
+  }
+
   function specFor(kind, item) {
     let spec;
+    if (kind === "scene") return sceneSpec(isObj(item) ? item : {});
+    if (kind === "sceneent") return sceneEntSpec(item);
     if (kind === "root") spec = rootSpec(isObj(item) ? item : {});
     else if (kind === "script") spec = scriptSpec(isObj(item) ? item : {});
     else if (kind === "trigger") spec = isObj(item) ? triggerSpec(item) : { title: "Auslöser", colour: C.generic, fields: [], lists: [], generic: true };
@@ -481,12 +505,12 @@
     return spec;
   }
 
-  const ROOTS = new Set(["root", "script"]);
+  const ROOTS = new Set(["root", "script", "scene"]);
   // Schlüssel einer Geräte-Automation (welche Art bei welchem Gerät).
   const devKey = (x) => (isObj(x) && (x.domain || x.type) ? JSON.stringify([x.domain || "", x.type || "", x.subtype === undefined ? "" : x.subtype, x.entity_id || ""]) : "");
   const classify = (listKind, el) => (listKind === "action" && isObj(el) && "condition" in el ? "condition" : listKind);
-  const CHECK_PREV = { trigger: "ha_trigger", condition: "ha_condition", action: "ha_action", option: "ha_option" };
-  const CHECK_LIST = { trigger: ["ha_trigger"], condition: ["ha_condition"], action: ["ha_action", "ha_condition"], option: ["ha_option"] };
+  const CHECK_PREV = { trigger: "ha_trigger", condition: "ha_condition", action: "ha_action", option: "ha_option", sceneent: "ha_sceneent" };
+  const CHECK_LIST = { trigger: ["ha_trigger"], condition: ["ha_condition"], action: ["ha_action", "ha_condition"], option: ["ha_option"], sceneent: ["ha_sceneent"] };
 
   // ---------- HA-Objekt -> Blockly-JSON ----------
   function itemToBlockJson(kind, item) {
@@ -505,7 +529,7 @@
     spec.lists.forEach((l, i) => {
       const v = getPath(item, l.path);
       if (v === undefined || v === null) return;
-      const arr = Array.isArray(v) ? v : [v];
+      const arr = listArr(l, v);
       const chain = chainJson(l.kind, arr);
       if (chain) (json.inputs = json.inputs || {})["L" + i] = { block: chain };
     });
@@ -592,6 +616,12 @@
         const items = [];
         for (let c = b.getInputTargetBlock(l.name); c; c = c.getNextBlock()) items.push(blockToItem(c));
         if ((l.orig === undefined || l.orig === null) && items.length === 0) return;
+        if (l.dict) {
+          const o = {};
+          for (const it of items) if (isObj(it) && typeof it.__e === "string" && it.__e) o[it.__e] = it.__v === undefined ? "" : it.__v;
+          setPath(out, l.path, o);
+          return;
+        }
         if (l.single && items.length === 1) setPath(out, l.path, items[0]);
         else setPath(out, l.path, items);
       });
@@ -842,7 +872,10 @@
       customContextMenu(options) {
         if (this.isInFlyout || ROOTS.has(this.haKind_) || !hooks.renameBlock || !isObj(this.raw_)) return;
         const block = this;
+        if (this.haKind_ === "sceneent") return;
         options.unshift({ text: "✏️ Name / Kommentar …", enabled: true, callback: () => hooks.renameBlock(block) });
+        if (hooks.changeType && ["trigger", "condition", "action"].includes(this.haKind_))
+          options.unshift({ text: "🔁 Typ ändern …", enabled: true, callback: () => hooks.changeType(block) });
         if (hooks.extractScript && (this.haKind_ === "action" || this.haKind_ === "condition") && this.previousConnection &&
             this.previousConnection.targetConnection && (this.previousConnection.getCheck() || []).includes("ha_action")) {
           options.push({ text: "📜 Als neues Skript auslagern (dieser Schritt)", enabled: true, callback: () => hooks.extractScript(block, false) });
@@ -856,7 +889,7 @@
         // Einfach-Modus: statt Eingabefeldern anklickbare Werte („Chips“), die ein
         // Auswahlfenster im HA-Stil öffnen. Gespeichert wird über replaceBlock (verlustfrei).
         const simpleBlock = hooks.simple && hooks.openEditor && nativeEditable(this.haKind_, raw);
-        if (hooks.simple && ROOTS.has(this.haKind_) && !spec.blueprint) spec.fields = spec.fields.filter((f) => f.path === "alias");
+        if (hooks.simple && ROOTS.has(this.haKind_) && !spec.blueprint) spec.fields = spec.fields.filter((f) => f.path === "alias" || f.path === "name");
         const chips = simpleBlock && hooks.pickField ? simpleChips(spec, raw) : [];
         if (simpleBlock) spec.fields = [];
         this.spec_ = spec;
@@ -972,6 +1005,12 @@
           this.appendDummyInput("SFIELDS").appendField("Eingaben").appendField(
             new FieldButton(keys.length ? keys.join(", ") : "keine – hinzufügen …", () => hooks.editScriptFields(block), "ha-chip"), "SFB");
         }
+        // Szene: Zustand von jetzt übernehmen (eine Entität bzw. alle).
+        if (hooks.captureScene && !this.isInFlyout && (this.haKind_ === "sceneent" || this.haKind_ === "scene")) {
+          const block = this;
+          this.appendDummyInput("CAP").appendField(new FieldButton(this.haKind_ === "scene" ? "📸 Alle Zustände von jetzt übernehmen" : "📸 Zustand von jetzt übernehmen",
+            () => hooks.captureScene(block), "ha-add"), "CAPB");
+        }
         if (hooks.blockly && !this.isInFlyout && this.haKind_ === "action" && isObj(raw)) {
           const block = this;
           if (isObj(raw.variables) && hooks.addVariable)
@@ -982,7 +1021,7 @@
           const name = "L" + i;
           const orig = getPath(raw, l.path);
           this.appendStatementInput(name).setCheck(CHECK_LIST[l.kind]).appendField(l.label);
-          this.listMap_.push({ name, path: l.path, orig, single: orig !== undefined && orig !== null && !Array.isArray(orig) });
+          this.listMap_.push({ name, path: l.path, orig, dict: !!l.dict, single: !l.dict && orig !== undefined && orig !== null && !Array.isArray(orig) });
           if (hooks.addItem && !this.isInFlyout) {
             const block = this;
             this.appendDummyInput("ADD" + i).appendField(
@@ -1027,6 +1066,11 @@
       this.setPreviousStatement(true, CHECK_PREV.option);
       this.setNextStatement(true, CHECK_PREV.option);
     });
+    def("scene", function () { this.setDeletable(false); });
+    def("sceneent", function () {
+      this.setPreviousStatement(true, CHECK_PREV.sceneent);
+      this.setNextStatement(true, CHECK_PREV.sceneent);
+    });
   }
 
   // ---------- Werkzeugkasten ----------
@@ -1048,6 +1092,17 @@
   const label = (text) => ({ kind: "label", text });
 
   function buildToolbox(kind = "root") {
+    if (kind === "scene") {
+      return {
+        kind: "categoryToolbox",
+        contents: [{ kind: "category", name: "Szene", colour: String(C.scene), contents: [
+          label("Entität in die Lücke ENTITÄTEN ziehen, dann „📸 Zustand von jetzt übernehmen“:"),
+          tb("sceneent", { __e: "", __v: "on" }),
+          tb("sceneent", { __e: "", __v: { state: "on", brightness: 255 } }),
+          tb("sceneent", { __e: "", __v: "off" }),
+        ] }],
+      };
+    }
     const services = hooks.services().map((s) => (Array.isArray(s) ? s[0] : s));
     const has = (s) => services.includes(s);
     const svc = (s, extra = {}) => tb("action", { action: s, target: { entity_id: "" }, ...extra });
@@ -1103,6 +1158,7 @@
         contents: [
           { kind: "category", name: "Wenn …", colour: String(C.trigger), contents: [
             btn("＋ Auslöser aus Home Assistant wählen …", "addTrigger"),
+            btn("＋ Auslöser nach Typ wählen …", "type_trigger"),
             label("oder einen Baustein in die WENN-Lücke ziehen:"),
             tb("trigger", { trigger: "state", entity_id: "" }),
             tb("trigger", { trigger: "time", at: "07:00:00" }),
@@ -1110,6 +1166,7 @@
           ] },
           { kind: "category", name: "Nur wenn …", colour: String(C.condition), contents: [
             btn("＋ Bedingung aus Home Assistant wählen …", "addCondition"),
+            btn("＋ Bedingung nach Typ wählen …", "type_condition"),
             label("oder einen Baustein in die NUR-WENN-Lücke ziehen:"),
             tb("condition", { condition: "state", entity_id: "", state: "" }),
             tb("condition", { condition: "time", after: "08:00:00", before: "22:00:00" }),
@@ -1117,6 +1174,7 @@
           ] },
           { kind: "category", name: "Dann …", colour: String(C.action), contents: [
             btn("＋ Aktion aus Home Assistant wählen …", "addAction"),
+            btn("＋ Aktion nach Typ wählen …", "type_action"),
             label("oder einen Baustein in die DANN-Lücke ziehen:"),
             svc("light.turn_on"), svc("light.turn_off"),
             tb("action", { action: "persistent_notification.create", data: { title: "", message: "" } }),
@@ -1136,6 +1194,7 @@
       kind: "categoryToolbox",
       contents: [
         { kind: "category", name: "Auslöser", colour: String(C.trigger), contents: [
+          btn("＋ Auslöser nach Typ wählen …", "type_trigger"),
           tb("trigger", { trigger: "state", entity_id: "", to: "" }),
           tb("trigger", { trigger: "numeric_state", entity_id: "", above: 20 }),
           tb("trigger", { trigger: "time", at: "07:00:00" }),
@@ -1154,6 +1213,7 @@
           ...(hooks.blockly ? [label("Gerät"), tb("trigger", { trigger: "device", device_id: "" })] : []),
         ] },
         { kind: "category", name: "Bedingungen", colour: String(C.condition), contents: [
+          btn("＋ Bedingung nach Typ wählen …", "type_condition"),
           tb("condition", { condition: "state", entity_id: "", state: "" }),
           tb("condition", { condition: "numeric_state", entity_id: "", below: 20 }),
           tb("condition", { condition: "time", after: "08:00:00", before: "22:00:00" }),
@@ -1168,6 +1228,7 @@
           ...(hooks.blockly ? [label("Gerät"), tb("condition", { condition: "device", device_id: "" })] : []),
         ] },
         { kind: "category", name: "Aktionen", colour: String(C.action), contents: [
+          btn("＋ Aktion nach Typ wählen …", "type_action"),
           ...actionBlocks,
           ...(hooks.blockly ? [label("Gerät"), tb("action", { device_id: "" })] : []),
         ] },
@@ -1271,7 +1332,7 @@
 
 
   // ---------- Pfade (wie in HA-Traces: "action/0/choose/1/sequence/0") ----------
-  const ROOT_SEG = { triggers: "trigger", trigger: "trigger", conditions: "condition", condition: "condition", actions: "action", action: "action", sequence: "sequence" };
+  const ROOT_SEG = { triggers: "trigger", trigger: "trigger", conditions: "condition", condition: "condition", actions: "action", action: "action", sequence: "sequence", entities: "entities" };
   const segOf = (kind, listPath) => (ROOTS.has(kind) ? ROOT_SEG[listPath] || listPath : listPath.replace(/\./g, "/"));
   const join = (base, seg, i) => (base ? `${base}/${seg}/${i}` : `${seg}/${i}`);
 
@@ -1285,7 +1346,7 @@
         const v = getPath(item, l.path);
         if (v === undefined || v === null) continue;
         const seg = segOf(k, l.path);
-        (Array.isArray(v) ? v : [v]).forEach((el, i) => rec(el, classify(l.kind, el), join(path, seg, i), [...parents, item]));
+        listArr(l, v).forEach((el, i) => rec(el, classify(l.kind, el), join(path, seg, i), [...parents, item]));
       }
     };
     rec(cfg, kind, "", []);
@@ -1565,6 +1626,7 @@
       if (!isObj(item)) { if (typeof item === "string") fromTemplates(item, k, path); return; }
       if (!path && ROOTS.has(k)) return;
       if (k === "option") return;
+      if (k === "sceneent") { add(item.__e, "action", path); return; }
       const role = k === "trigger" ? "trigger" : k === "condition" ? "condition" : "action";
       const ents = [];
       if (item.entity_id !== undefined) ents.push(...[].concat(item.entity_id));
@@ -1586,6 +1648,7 @@
   // Findet Stellen, an denen noch eine Auswahl fehlt (für Warnhinweise am Block).
   function missingInfo(item) {
     if (!isObj(item)) return null;
+    if ("__e" in item && !item.__e) return "Bitte noch eine Entität auswählen";
     const empty = (v) => v === "" || (Array.isArray(v) && v.length === 0);
     if ((item.trigger === "device" || item.platform === "device" || item.condition === "device" || "device_id" in item) &&
         !("action" in item) && (empty(item.device_id) || item.device_id === undefined)) return "Bitte noch ein Gerät auswählen";
@@ -1602,8 +1665,11 @@
   // ---------- YAML-Ansicht (nur zum Lesen) ----------
   const YAML_PLAIN = /^[A-Za-z_À-ɏ][A-Za-z0-9_ .\-\/À-ɏ]*$/;
   const YAML_RESERVED = /^(true|false|yes|no|on|off|null|~)$/i;
+  const INPUT_RE = /^@@input:([^@]+)@@$/;
+  const inputPlaceholder = (name) => `@@input:${name}@@`;
   function yScalar(v) {
     if (v === null || v === undefined) return "null";
+    if (typeof v === "string" && INPUT_RE.test(v)) return "!input " + INPUT_RE.exec(v)[1];
     if (typeof v === "number" || typeof v === "boolean") return String(v);
     const s = String(v);
     if (s === "") return '""';
@@ -1761,9 +1827,74 @@
     return { fields, data, sequence, notes };
   }
 
+  /* ---------- Auswahl nach Typ ----------
+   * Katalog je Art: [{ group, items: [{ label, hint, item, blockly? }] }]. item = Vorlage (leere Werte werden
+   * beim Einfügen weggelassen). services: [[id, name]] für die Aktionen nach Integration. */
+  function typeCatalog(kind, services = [], domainName = (d) => d) {
+    const it = (label, item, hint = "", o = {}) => ({ label, item, hint, ...o });
+    if (kind === "trigger") return [
+      { group: "Entität", items: [it("🔁 Zustand ändert sich", { trigger: "state", entity_id: "" }, "z. B. Tür auf, Licht an"),
+        it("📈 Zahlenwert über/unter", { trigger: "numeric_state", entity_id: "", above: 0 }, "z. B. Temperatur über 25")] },
+      { group: "Zeit & Ort", items: [it("⏰ Uhrzeit", { trigger: "time", at: "07:00:00" }), it("🕑 Zeitmuster", { trigger: "time_pattern", minutes: "/5" }, "alle 5 Minuten …"),
+        it("☀️ Sonne", { trigger: "sun", event: "sunset" }, "Sonnenauf-/-untergang"), it("📍 Zone betreten/verlassen", { trigger: "zone", entity_id: "", zone: "zone.home", event: "enter" }),
+        it("📅 Kalender-Termin", { trigger: "calendar", entity_id: "", event: "start" })] },
+      { group: "Gerät", items: [it("📟 Gerät (Taster, Sensor …)", { trigger: "device", device_id: "" }, "erst Gerät, dann Art wählen")] },
+      { group: "Andere", items: [it("🧩 Template wird wahr", { trigger: "template", value_template: "" }), it("🏠 Home Assistant startet", { trigger: "homeassistant", event: "start" }),
+        it("📣 Ereignis", { trigger: "event", event_type: "" }), it("💬 Sprachbefehl", { trigger: "conversation", command: "" }),
+        it("📡 MQTT", { trigger: "mqtt", topic: "" }), it("🌐 Webhook", { trigger: "webhook", webhook_id: "", local_only: true }),
+        it("🏷️ NFC-Tag", { trigger: "tag", tag_id: "" }), it("🔔 Benachrichtigung", { trigger: "persistent_notification", notification_id: "" })] },
+    ];
+    if (kind === "condition") return [
+      { group: "Entität", items: [it("🔎 Zustand ist", { condition: "state", entity_id: "", state: "" }), it("📏 Zahlenwert über/unter", { condition: "numeric_state", entity_id: "", below: 20 })] },
+      { group: "Zeit & Ort", items: [it("⏰ Uhrzeit / Wochentag", { condition: "time", after: "08:00:00", before: "22:00:00" }), it("☀️ Sonne", { condition: "sun", after: "sunset" }),
+        it("📍 In Zone", { condition: "zone", entity_id: "", zone: "zone.home" })] },
+      { group: "Auslöser", items: [it("🏷️ Ausgelöst durch ID", { condition: "trigger", id: "" }, "welcher Auslöser es war")] },
+      { group: "Logik", items: [it("UND – alle erfüllt", { condition: "and", conditions: [] }), it("ODER – eine erfüllt", { condition: "or", conditions: [] }),
+        it("NICHT – keine erfüllt", { condition: "not", conditions: [] }),
+        it("🧮 Bedingung aus Logik-Bausteinen", { condition: "template", value_template: "" }, "Werte & Logik hineinstecken", { blockly: true }),
+        it("🧩 Template", { condition: "template", value_template: "" }, "Jinja-Text", { blockly: false })] },
+      { group: "Gerät", items: [it("📟 Gerät", { condition: "device", device_id: "" })] },
+    ];
+    // Aktionen
+    const doms = new Map();
+    for (const s of services) {
+      const id = Array.isArray(s) ? s[0] : s;
+      if (typeof id !== "string" || !id.includes(".")) continue;
+      const d = id.split(".")[0];
+      if (!doms.has(d)) doms.set(d, []);
+      doms.get(d).push(it((Array.isArray(s) && s[1]) || id, { action: id }, id));
+    }
+    const byDomain = [...doms.entries()].sort((a, b) => String(domainName(a[0])).localeCompare(String(domainName(b[0])), "de"))
+      .map(([d, items]) => ({ group: `Dienste: ${domainName(d) || d}`, items }));
+    return [
+      { group: "Häufig", items: [it("▶️ Dienst aufrufen …", { action: "" }, "beliebiger Dienst"), it("🎬 Szene aktivieren", { scene: "" }),
+        it("📜 Skript ausführen", { action: "script.turn_on", target: { entity_id: "" } }), it("🔔 Benachrichtigung", { action: "persistent_notification.create", data: { message: "" } })] },
+      { group: "Ablauf", items: [it("❓ Wenn … dann … sonst", { if: [], then: [], else: [] }), it("🔀 Auswahl (mehrere Fälle)", { choose: [{ conditions: [], sequence: [] }] }),
+        it("⏱️ Warten", { delay: { hours: 0, minutes: 1, seconds: 0 } }), it("⏳ Warten bis (Template)", { wait_template: "", timeout: { minutes: 5 }, continue_on_timeout: true }),
+        it("⏳ Warten auf Auslöser", { wait_for_trigger: [], timeout: { minutes: 5 } }), it("🔁 Wiederholen (Anzahl)", { repeat: { count: 2, sequence: [] } }),
+        it("🔁 Wiederholen solange", { repeat: { while: [], sequence: [] } }), it("🔁 Wiederholen bis", { repeat: { until: [], sequence: [] } }),
+        it("⏸ Parallel ausführen", { parallel: [] }), it("📦 Variablen setzen", { variables: { name: "wert" } }), it("⛔ Stopp", { stop: "" })] },
+      { group: "Bedingung als Schritt", items: [it("🔎 Weiter nur wenn Zustand …", { condition: "state", entity_id: "", state: "" }),
+        it("🧮 Weiter nur wenn (Logik-Bausteine)", { condition: "template", value_template: "" }, "", { blockly: true })] },
+      { group: "Gerät & Ereignis", items: [it("📟 Gerät", { device_id: "" }), it("📣 Ereignis senden", { event: "", event_data: {} })] },
+      ...byDomain,
+    ];
+  }
+
+  // Typ eines Elements wechseln: Vorlage nehmen, Passendes (Entität, Ziel, Name, ID …) übernehmen.
+  function convertType(old, template) {
+    const n = stripEmpty(clone(template));
+    if (!isObj(old) || !isObj(n)) return n;
+    for (const k of ["alias", "enabled", "id", "continue_on_error"]) if (old[k] !== undefined && !(k === "id" && "condition" in n && n.condition === "trigger")) n[k] = old[k];
+    if (old.entity_id !== undefined && ("entity_id" in template || ["state", "numeric_state", "zone", "calendar"].includes(n.trigger || n.condition)))
+      n.entity_id = old.entity_id;
+    if (isObj(old.target) && "action" in n && n.action !== "") n.target = clone(old.target);
+    return n;
+  }
+
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

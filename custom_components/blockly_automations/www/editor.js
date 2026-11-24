@@ -12,7 +12,11 @@
     paths: null, hints: [], trace: null, runs: [], live: false, liveRes: {}, tplUnsubs: [], xref: null,
   };
   // Was gerade bearbeitet wird: Automation (Block ha_root) oder Skript (Block ha_script).
-  const rootKind = (k = S.kind) => (k === "script" ? "script" : "root");
+  // Arten: automation, script, scene, blueprint (Blueprint: Automation oder Skript mit !input-Platzhaltern).
+  const KINDS = ["automation", "script", "scene", "blueprint"];
+  const rootKind = (k = S.kind) => (k === "script" ? "script" : k === "scene" ? "scene"
+    : k === "blueprint" ? (S.bp && S.bp.domain === "script" ? "script" : "root") : "root");
+  const hasRuns = (k = S.kind) => k === "automation" || k === "script";
   const NO_CAT = "__none__";
 
   // ---------- Daten aus HA für Felder und Vorschläge ----------
@@ -345,6 +349,7 @@
     if (!block || block.isDisposed() || block.isInFlyout) return;
     Blockly.hideChaff();
     if (kind === "option") { appendToInput(block, inputName, "option", { conditions: [], sequence: [] }); return; }
+    if (kind === "sceneent") { appendToInput(block, inputName, "sceneent", { __e: "", __v: "on" }); return; }
     const fn = parent.__haBlocklyAddItem;
     const res = fn ? await fn(kind) : undefined;
     if (res === undefined) { status("Die HA-Auswahl ist gerade nicht verfügbar – zieh einen Baustein aus dem Werkzeugkasten in die Lücke.", "warn"); return; }
@@ -438,7 +443,20 @@
     return t.replace(/\s+/g, " ").trim();
   }
   const TIMES = ["06:00:00", "06:30:00", "07:00:00", "08:00:00", "12:00:00", "17:00:00", "18:00:00", "20:00:00", "22:00:00", "23:00:00"];
+  const bpInputsList = () => {
+    if (S.kind !== "blueprint" || !S.bp) return [];
+    const out = [];
+    (function walk(o) { for (const [k, v] of Object.entries(o || {})) { if (v && isObj(v.input)) walk(v.input); else out.push([k, (v && v.name) || k]); } })(S.bp.meta.input);
+    return out;
+  };
   HAB.hooks.options = (type, field) => {
+    const base = optionsBase(type, field);
+    const ins = bpInputsList();
+    if (!ins.length || ["devauto", "triggerid", "attribute", "variable"].includes(type)) return base;
+    const pre = ins.map(([k, n]) => [HAB.inputPlaceholder(k), "🧩 Eingabe: " + n, "Blueprint-Eingaben", k]);
+    return Promise.resolve(base).then((b) => [...pre, ...(b || [])]);
+  };
+  const optionsBase = (type, field) => {
     if (!S.hass) return [];
     const def = field.def_ || {};
     const byGroup = (a, b) => String(a[2] || "").localeCompare(String(b[2] || ""), "de") || String(a[1] || a[0]).localeCompare(String(b[1] || b[0]), "de");
@@ -487,6 +505,8 @@
   };
   HAB.hooks.optionLabel = (type, v, field) => {
     if (!S.hass || v === "") return "";
+    const pm = HAB.INPUT_RE.exec(v);
+    if (pm) { const f = bpInputsList().find(([k]) => k === pm[1]); return "🧩 " + (f ? f[1] : pm[1]); }
     const def = (field && field.def_) || {};
     switch (type) {
       case "entity": { const st = S.hass.states[v]; return st ? fname(st) || v : v; }
@@ -653,7 +673,12 @@
   if (BLOCKLY) {
     HAB.hooks.openEditor = null;
     HAB.hooks.pickField = null;
-    HAB.hooks.addItem = (block, inputName, kind) => openToolboxFor(kind);
+    HAB.hooks.addItem = async (block, inputName, kind) => {
+      if (kind === "option") { appendToInput(block, inputName, "option", { conditions: [], sequence: [] }); return; }
+      if (kind === "sceneent") { appendToInput(block, inputName, "sceneent", { __e: "", __v: "on" }); return; }
+      const item = await pickType(kind);
+      if (item && !block.isDisposed()) appendToInput(block, inputName, HAB.classify(kind, item), item);
+    };
   }
 
   HAB.defineBlocks(Blockly);
@@ -666,7 +691,8 @@
   const errText = (e) => (e && ((e.body && e.body.message) || e.message)) || String(e);
 
   function apiFor(kind, method, id, body) {
-    return S.hass.callApi(method, `config/${kind === "script" ? "script" : "automation"}/config/${encodeURIComponent(id)}`, body);
+    const k = kind === "script" ? "script" : kind === "scene" ? "scene" : "automation";
+    return S.hass.callApi(method, `config/${k}/config/${encodeURIComponent(id)}`, body);
   }
   const api = (method, id, body) => apiFor(S.kind, method, id, body);
 
@@ -705,6 +731,7 @@
     });
     // Bei Skripten gibt es nur eine Lücke (ABLAUF); Bedingungen sind dort Schritte.
     initPlugins();
+    S.ws_buttons();
     const rootAdd = (i, kind) => () => {
       const r = rootBlock();
       if (!r) return;
@@ -735,7 +762,7 @@
   }
 
   function rootBlock(ws = S.ws) {
-    return ws.getBlocksByType("ha_root", false)[0] || ws.getBlocksByType("ha_script", false)[0] || null;
+    return ws.getBlocksByType("ha_root", false)[0] || ws.getBlocksByType("ha_script", false)[0] || ws.getBlocksByType("ha_scene", false)[0] || null;
   }
 
   function currentConfig(ws = S.ws) {
@@ -766,7 +793,7 @@
   }
   function updateTitle() {
     const c = S.ws && currentConfig();
-    $("title").textContent = c ? (c.alias || "(ohne Namen)") : "–";
+    $("title").textContent = S.kind === "blueprint" && S.bp ? "🧩 " + (S.bp.meta.name || S.bp.path) : c ? (c.alias || c.name || "(ohne Namen)") : "–";
   }
   function updateStatus() {
     if (!S.original) { status(""); return; }
@@ -776,7 +803,7 @@
       $("save").disabled = true;
       return;
     }
-    const changed = S.isNew || !HAB.deepEqual(currentConfig(), S.original);
+    const changed = S.isNew || !HAB.deepEqual(currentConfig(), S.original) || bpDirty();
     const loose = looseCount();
     const missing = markMissing();
     $("save").disabled = false;
@@ -882,25 +909,35 @@
   // Automationen: ID steht im Attribut „id“. Skripte: ID = unique_id aus dem Register (sonst object_id).
   function itemList(kind = S.kind) {
     if (!S.hass) return [];
+    if (kind === "blueprint") {
+      const out = [];
+      for (const domain of ["automation", "script"]) {
+        for (const [path, bp] of Object.entries(S.blueprints[domain] || {})) {
+          if (!bp || !bp.metadata) continue;
+          out.push({ id: `${domain}:${path}`, entity_id: `${domain}:${path}`, name: bp.metadata.name || path, on: true, kind, domain, path, meta: bp.metadata });
+        }
+      }
+      return out.sort((a, b) => a.name.localeCompare(b.name, "de"));
+    }
     const pre = kind + ".";
     return Object.values(S.hass.states)
-      .filter((s) => s.entity_id.startsWith(pre) && (kind !== "automation" || s.attributes.id))
+      .filter((s) => s.entity_id.startsWith(pre) && (kind === "script" || s.attributes.id))
       .map((s) => ({
-        id: kind === "automation" ? String(s.attributes.id) : S.uid[s.entity_id] || s.entity_id.slice(pre.length),
+        id: kind === "script" ? S.uid[s.entity_id] || s.entity_id.slice(pre.length) : String(s.attributes.id),
         entity_id: s.entity_id, name: s.attributes.friendly_name || s.entity_id, on: s.state === "on", kind,
       }))
       .sort((a, b) => a.name.localeCompare(b.name, "de"));
   }
   const entityOf = (id, kind = S.kind) => { const a = itemList(kind).find((x) => x.id === id); return a ? a.entity_id : null; };
-  const lastKey = (kind = S.kind) => (kind === "script" ? "haBlockly.last.script" : "haBlockly.last");
+  const lastKey = (kind = S.kind) => (kind === "automation" ? "haBlockly.last" : "haBlockly.last." + kind);
 
   async function refreshMeta() {
     try {
       const byName = (l) => (Array.isArray(l) ? l : []).sort((a, b) => a.name.localeCompare(b.name, "de"));
-      const [ca, cs] = await Promise.all(["automation", "script"].map((scope) =>
+      const [ca, cs, cz] = await Promise.all(["automation", "script", "scene"].map((scope) =>
         S.hass.callWS({ type: "config/category_registry/list", scope }).catch(() => [])));
-      S.catsBy = { automation: byName(ca), script: byName(cs) };
-      const ids = Object.keys(S.hass.states).filter((e) => e.startsWith("automation.") || e.startsWith("script."));
+      S.catsBy = { automation: byName(ca), script: byName(cs), scene: byName(cz), blueprint: [] };
+      const ids = Object.keys(S.hass.states).filter((e) => e.startsWith("automation.") || e.startsWith("script.") || e.startsWith("scene."));
       const entries = ids.length ? await S.hass.callWS({ type: "config/entity_registry/get_entries", entity_ids: ids }) : {};
       S.regCat = {};
       S.uid = {};
@@ -935,7 +972,7 @@
     for (const c of S.cats) sel.appendChild(new Option(c.name, c.category_id));
     sel.appendChild(new Option("＋ Neue Kategorie …", "__new__"));
     sel.value = catOfCurrent() || NO_CAT;
-    sel.disabled = !S.id;
+    sel.disabled = !S.id || S.kind === "blueprint";
   }
 
   async function createCategory() {
@@ -976,12 +1013,15 @@
     S.listKey = key;
     const q = S.search.toLowerCase();
     const shown = autos.filter((a) => !q || a.name.toLowerCase().includes(q) || a.entity_id.includes(q));
-    const groups = [...S.cats.map((c) => ({ id: c.category_id, name: c.name })), { id: NO_CAT, name: "Ohne Kategorie" }];
+    const isBp = S.kind === "blueprint";
+    const groups = isBp ? [{ id: "automation", name: "Blueprints für Automationen" }, { id: "script", name: "Blueprints für Skripte" }]
+      : [...S.cats.map((c) => ({ id: c.category_id, name: c.name })), { id: NO_CAT, name: "Ohne Kategorie" }];
+    const groupOf = (a) => (isBp ? a.domain : S.regCat[a.entity_id] || NO_CAT);
     const closed = collapsed();
     const tree = $("tree");
     tree.innerHTML = "";
     for (const g of groups) {
-      const items = shown.filter((a) => (S.regCat[a.entity_id] || NO_CAT) === g.id);
+      const items = shown.filter((a) => groupOf(a) === g.id);
       if (q && !items.length) continue;
       const folder = document.createElement("div");
       folder.className = "folder" + (closed[g.id] && !q ? " closed" : "");
@@ -998,7 +1038,7 @@
       });
       folder.appendChild(head);
       // Ablegen: Kategorie ändern
-      folder.addEventListener("dragover", (e) => { e.preventDefault(); folder.classList.add("drop"); });
+      if (!isBp) folder.addEventListener("dragover", (e) => { e.preventDefault(); folder.classList.add("drop"); });
       folder.addEventListener("dragleave", (e) => { if (!folder.contains(e.relatedTarget)) folder.classList.remove("drop"); });
       folder.addEventListener("drop", async (e) => {
         e.preventDefault();
@@ -1013,15 +1053,21 @@
       for (const a of items) {
         const it = document.createElement("div");
         it.className = "item" + (a.id === S.id && !S.isNew ? " sel" : "") + (a.on ? "" : " off");
-        it.draggable = true;
-        it.title = a.entity_id;
+        it.draggable = !isBp;
+        it.title = isBp ? a.path : a.entity_id;
         it.innerHTML = S.kind === "script"
           ? `<span class="name"></span>${a.on ? '<span class="running" title="läuft gerade">●</span>' : ""}<button class="run icon" title="Skript jetzt ausführen">▶</button>`
+          : S.kind === "scene" ? `<span class="name"></span><button class="run icon" title="Szene jetzt aktivieren">▶</button>`
+          : isBp ? `<span class="name"></span><button class="use icon" title="Neue ${a.domain === "script" ? "Skript" : "Automation"} aus diesem Blueprint">＋</button><button class="del icon" title="Blueprint löschen">🗑</button>`
           : `<span class="name"></span><label class="switch" title="Automation ein/aus"><input type="checkbox"${a.on ? " checked" : ""}><span></span></label>`;
         it.querySelector(".name").textContent = a.name;
-        if (S.kind === "script") it.classList.remove("off");
+        if (S.kind !== "automation") it.classList.remove("off");
+        const use = it.querySelector(".use");
+        if (use) use.addEventListener("click", () => useBlueprint(a));
+        const del = it.querySelector(".del");
+        if (del) del.addEventListener("click", () => deleteBlueprint(a));
         it.addEventListener("click", (e) => {
-          if (e.target.closest(".switch") || e.target.closest(".run")) return;
+          if (e.target.closest(".switch") || e.target.closest(".run") || e.target.closest(".use") || e.target.closest(".del")) return;
           if (a.id !== S.id || S.isNew) { if (confirmDiscard()) load(a.id); }
           if (window.innerWidth < 800) $("list").classList.add("hidden");
         });
@@ -1031,9 +1077,9 @@
         });
         const run = it.querySelector(".run");
         if (run) run.addEventListener("click", () => {
-          Promise.resolve(S.hass.callService("script", "turn_on", { entity_id: a.entity_id }))
-            .then(() => status(`▶ ${a.name} gestartet`, "ok"))
-            .catch((err) => status("Skript nicht gestartet: " + errText(err), "warn"));
+          Promise.resolve(S.hass.callService(S.kind === "scene" ? "scene" : "script", "turn_on", { entity_id: a.entity_id }))
+            .then(() => status(`▶ ${a.name} ${S.kind === "scene" ? "aktiviert" : "gestartet"}`, "ok"))
+            .catch((err) => status("Nicht gestartet: " + errText(err), "warn"));
         });
         it.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", a.entity_id); it.classList.add("dragging"); });
         it.addEventListener("dragend", () => it.classList.remove("dragging"));
@@ -1080,7 +1126,7 @@
     if (!id) return;
     status("Lade …");
     try {
-      const cfg = await api("GET", id);
+      const cfg = S.kind === "blueprint" ? await loadBlueprint(id) : await api("GET", id);
       S.isNew = false;
       S.pendingCat = null;
       S.id = id;
@@ -1116,14 +1162,15 @@
     return null;
   }
 
-  const KIND_NAME = () => (S.kind === "script" ? "Skript" : "Automation");
+  const KIND_NAME = () => ({ script: "Skript", scene: "Szene", blueprint: "Blueprint" }[S.kind] || "Automation");
   async function save() {
     if (!S.id || !S.lossless) return;
     // Offenen Feld-Editor schließen, damit sein Wert sicher übernommen ist.
     Blockly.hideChaff();
     await new Promise((r) => setTimeout(r, 30));
     const cfg = currentConfig();
-    if (!S.isNew && HAB.deepEqual(cfg, S.original)) { updateStatus(); return; }
+    if (!S.isNew && HAB.deepEqual(cfg, S.original) && !bpDirty()) { updateStatus(); return; }
+    if (S.kind === "blueprint") { await saveBlueprint(cfg); return; }
     const yesNo = (title, text) => askChoice(title, text, [["Abbrechen", false], ["Trotzdem speichern", true, true]]);
     if (looseCount() && !(await yesNo("Lose Bausteine", `${looseCount()} Baustein(e) hängen nicht an der ${KIND_NAME()} und werden nicht gespeichert.`))) return;
     const missing = markMissing();
@@ -1170,7 +1217,7 @@
     if (!S.ws) return true;
     if (S.isNew && !HAB.deepEqual(currentConfig(), S.original)) return confirm("Neue, ungespeicherte Automation verwerfen?");
     if (!S.original || !S.lossless) return true;
-    if (HAB.deepEqual(currentConfig(), S.original)) return true;
+    if (HAB.deepEqual(currentConfig(), S.original) && !bpDirty()) return true;
     return confirm("Ungespeicherte Änderungen verwerfen?");
   }
 
@@ -1194,10 +1241,11 @@
   }
 
   // ---------- Automationen / Skripte umschalten ----------
-  const metaCount = () => itemList("automation").length * 100000 + itemList("script").length;
+  const metaCount = () => `${itemList("automation").length}/${itemList("script").length}/${itemList("scene").length}`;
   function renderTabs() {
-    for (const [k, id] of [["automation", "tabAuto"], ["script", "tabScript"]]) $(id).classList.toggle("sel", S.kind === k);
-    $("search").placeholder = S.kind === "script" ? "Skript suchen …" : "Automation suchen …";
+    for (const [k, id] of [["automation", "tabAuto"], ["script", "tabScript"], ["scene", "tabScene"], ["blueprint", "tabBp"]]) $(id).classList.toggle("sel", S.kind === k);
+    $("search").placeholder = `${KIND_NAME()} suchen …`;
+    document.body.dataset.kind = S.kind;
   }
   function switchKind(kind, autoload = true) {
     if (kind === S.kind) return true;
@@ -1205,7 +1253,7 @@
     S.kind = kind;
     store("haBlockly.kind", kind);
     clearTrace();
-    S.id = null; S.original = null; S.isNew = false; S.pendingCat = null;
+    S.id = null; S.original = null; S.isNew = false; S.pendingCat = null; S.bp = null;
     S.busy = true;
     Blockly.Events.disable();
     try { S.ws.clear(); } finally { Blockly.Events.enable(); S.busy = false; }
@@ -1343,7 +1391,7 @@
   }
   async function loadRuns() {
     S.runs = []; S.runsErr = null;
-    if (!S.id || S.isNew) { renderInsp(); return; }
+    if (!S.id || S.isNew || !hasRuns()) { renderInsp(); return; }
     const id = S.id;
     try {
       const list = await S.hass.callWS({ type: "trace/list", domain: S.kind, item_id: S.id });
@@ -1397,7 +1445,7 @@
   function renderDryOptions() {
     const dsel = $("dryTrigger");
     const cfg = rootBlock() ? currentConfig() : null;
-    const trigs = cfg && S.kind !== "script" ? [].concat(cfg.triggers || cfg.trigger || []) : [];
+    const trigs = cfg && rootKind() === "root" ? [].concat(cfg.triggers || cfg.trigger || []) : [];
     const keep = dsel.value;
     dsel.innerHTML = "";
     trigs.forEach((t, i) => {
@@ -1407,7 +1455,7 @@
     });
     if (keep && [...dsel.options].some((o) => o.value === keep)) dsel.value = keep;
     dsel.style.display = trigs.length ? "" : "none";
-    $("dryRun").disabled = !cfg;
+    $("dryRun").disabled = !cfg || !hasRuns();
   }
   const stateObj = (st) => (st ? { entity_id: st.entity_id, state: st.state, attributes: st.attributes, name: fname(st) || st.entity_id, last_changed: st.last_changed } : null);
   async function runDry() {
@@ -1621,7 +1669,7 @@
   // Querverweise: wer löst auf eine Entität aus, wer prüft sie, wer schaltet sie, wer ruft ein Skript auf?
   async function buildXref(force) {
     if (S.xref && !force) return S.xref;
-    const all = [...itemList("automation"), ...itemList("script")];
+    const all = [...itemList("automation"), ...itemList("script"), ...itemList("scene")];
     const rows = [];
     const queue = all.slice();
     let done = 0;
@@ -1694,7 +1742,7 @@
             seen.add(key);
             const a = document.createElement("a");
             a.href = "#";
-            a.textContent = (r.kind === "script" ? "📜 " : "🤖 ") + r.name;
+            a.textContent = ({ script: "📜 ", scene: "🎬 " }[r.kind] || "🤖 ") + r.name;
             a.title = r.path;
             a.addEventListener("click", (e) => { e.preventDefault(); openItem(r.kind, r.id, r.path); });
             line.appendChild(a);
@@ -1710,7 +1758,8 @@
   }
 
   async function showSelfTest() {
-    const body = openModal(`🧪 Alle ${S.kind === "script" ? "Skripte" : "Automationen"} prüfen`);
+    if (S.kind === "blueprint") { status("Der Selbsttest gilt für Automationen, Skripte und Szenen.", "warn"); return; }
+    const body = openModal(`🧪 Alle ${{ script: "Skripte", scene: "Szenen" }[S.kind] || "Automationen"} prüfen`);
     body.innerHTML = '<div class="hint">Prüft, ob jede Konfiguration verlustfrei als Bausteine dargestellt werden kann (nur lesen, nichts wird gespeichert).</div><div id="stRes"></div>';
     const res = await selfTest(S.kind, (i, n) => { $("mStatus").textContent = `${i}/${n}`; });
     $("mStatus").textContent = "";
@@ -1878,6 +1927,270 @@
   $("fitBtn").addEventListener("click", () => { if (S.ws) S.ws.zoomToFit(); });
   $("findBtn").addEventListener("click", () => { $("find").classList.toggle("hidden"); if (!$("find").classList.contains("hidden")) $("findInput").focus(); });
 
+  // ---------- Auswahl nach Typ ----------
+  const TYPE_TITLE = { trigger: "Auslöser", condition: "Bedingung", action: "Aktion" };
+  function pickType(kind, title) {
+    return new Promise((resolve) => {
+      const groups = HAB.typeCatalog(kind, HAB.hooks.services(), HAB.hooks.domainName)
+        .map((g) => ({ ...g, items: g.items.filter((x) => x.blockly === undefined || x.blockly === BLOCKLY) }))
+        .filter((g) => g.items.length);
+      const body = openModal(title || `${TYPE_TITLE[kind] || "Baustein"} hinzufügen – nach Typ`);
+      body.innerHTML = '<input id="tq" type="search" placeholder="Typ suchen …" autocomplete="off" class="tq"><div id="tlist" class="tlist"></div>';
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; closeModal(); resolve(v); };
+      const onClose = () => finish(null);
+      $("mClose").addEventListener("click", onClose, { once: true });
+      const render = () => {
+        const q = $("tq").value.trim().toLowerCase();
+        const list = $("tlist");
+        list.innerHTML = "";
+        let n = 0;
+        for (const g of groups) {
+          const items = g.items.filter((x) => !q || x.label.toLowerCase().includes(q) || (x.hint || "").toLowerCase().includes(q) || g.group.toLowerCase().includes(q));
+          if (!items.length) continue;
+          const h = document.createElement("div");
+          h.className = "tgroup";
+          h.textContent = g.group;
+          list.appendChild(h);
+          for (const x of items.slice(0, q ? 200 : 60)) {
+            const b = document.createElement("button");
+            b.className = "titem";
+            b.innerHTML = "<span></span><small></small>";
+            b.querySelector("span").textContent = x.label;
+            b.querySelector("small").textContent = x.hint || "";
+            b.addEventListener("click", () => finish(HAB.stripEmpty(HAB.clone(x.item))));
+            list.appendChild(b);
+            n++;
+          }
+        }
+        if (!n) list.innerHTML = '<div class="hint">Kein passender Typ.</div>';
+      };
+      $("tq").addEventListener("input", render);
+      $("tq").addEventListener("keydown", (e) => { if (e.key === "Enter") { const f = $("tlist").querySelector(".titem"); if (f) f.click(); } });
+      render();
+      setTimeout(() => $("tq").focus(), 0);
+    });
+  }
+  // Rechtsklick „Typ ändern“: passende Werte (Entität, Ziel, Name, ID) bleiben erhalten.
+  HAB.hooks.changeType = async (block) => {
+    if (!block || block.isDisposed()) return;
+    let kind = block.haKind_;
+    const prev = block.previousConnection && block.previousConnection.targetConnection;
+    if (kind === "condition" && prev && (prev.getCheck() || []).includes("ha_action")) kind = "action";
+    const tpl = await pickType(kind, `${TYPE_TITLE[kind]} – Typ ändern`);
+    if (!tpl || block.isDisposed()) return;
+    replaceBlock(block, HAB.convertType(HAB.blockToItem(block), tpl));
+    status("Typ geändert – passende Werte wurden übernommen.", "ok");
+  };
+  S.ws_buttons = () => {
+    for (const k of ["trigger", "condition", "action"]) S.ws.registerButtonCallback("type_" + k, () => {
+      const r = rootBlock();
+      if (!r) return;
+      const input = S.kind === "script" || (S.kind === "blueprint" && rootKind() === "script") ? "L0" : "L" + ["trigger", "condition", "action"].indexOf(k);
+      pickType(k).then((item) => { if (item && !r.isDisposed()) appendToInput(r, input, HAB.classify(k, item), item); });
+    });
+  };
+
+  // ---------- Szenen ----------
+  const sceneValue = (eid, old) => {
+    const st = S.hass.states[eid];
+    if (!st) return old;
+    const attrs = {};
+    for (const a of HAB.SCENE_ATTRS) if (a in st.attributes && st.attributes[a] !== null && st.attributes[a] !== undefined) attrs[a] = st.attributes[a];
+    return st.state === "off" || !Object.keys(attrs).length ? st.state : { state: st.state, ...attrs };
+  };
+  HAB.hooks.captureScene = (block) => {
+    if (!block || block.isDisposed()) return;
+    if (block.haKind_ === "scene") {
+      const cfg = currentConfig();
+      if (!cfg || !isObj(cfg.entities)) return;
+      for (const e of Object.keys(cfg.entities)) cfg.entities[e] = sceneValue(e, cfg.entities[e]);
+      reloadKeepingLayout(cfg);
+      status("📸 Zustände von jetzt übernommen – noch nicht gespeichert.", "ok");
+      return;
+    }
+    const it = HAB.blockToItem(block);
+    if (!it.__e) { status("Bitte zuerst eine Entität wählen.", "warn"); return; }
+    it.__v = sceneValue(it.__e, it.__v);
+    replaceBlock(block, it);
+  };
+  async function newScene() {
+    const name = ((await askText("Name der neuen Szene", "Neue Szene")) || "").trim();
+    if (!name) return;
+    if (S.kind !== "scene") { if (!switchKind("scene", false)) return; }
+    else if (!confirmDiscard()) return;
+    newItem(() => ({ name, entities: {} }), String(Date.now()));
+    status("✚ Neue Szene – Entitäten aus dem Werkzeugkasten in ENTITÄTEN ziehen, dann „📸 Zustand übernehmen“.", "ok");
+  }
+
+  // ---------- Blueprints ----------
+  const bpDirty = () => !!(S.kind === "blueprint" && S.bp && !HAB.deepEqual(S.bp.meta, S.bp.metaOrig));
+  const bpInputNames = (input) => {
+    const out = [];
+    (function walk(o) { for (const [k, v] of Object.entries(o || {})) { if (v && isObj(v.input)) walk(v.input); else out.push(k); } })(input);
+    return out;
+  };
+  // Laden: HA setzt für jede Eingabe einen Platzhalter ein – so wird der Blueprint zur bearbeitbaren Automation.
+  async function loadBlueprint(id) {
+    const i = id.indexOf(":");
+    const domain = id.slice(0, i), path = id.slice(i + 1);
+    const bp = (S.blueprints[domain] || {})[path];
+    if (!bp || !bp.metadata) throw new Error("Blueprint nicht gefunden");
+    const input = {};
+    for (const n of bpInputNames(bp.metadata.input)) input[n] = HAB.inputPlaceholder(n);
+    const res = await S.hass.callWS({ type: "blueprint/substitute", domain, path, input });
+    S.bp = { domain, path, meta: HAB.clone(bp.metadata), metaOrig: HAB.clone(bp.metadata) };
+    return (res && (res.substituted_config || res.config)) || res;
+  }
+  async function saveBlueprint(cfg) {
+    const { domain, path, meta } = S.bp;
+    if (!S.bp.isNew && !S.bp.warned) {
+      const ok = await askChoice("Blueprint speichern", `Die Datei blueprints/${domain}/${path} wird neu geschrieben. Kommentare und Formatierung in der YAML-Datei gehen dabei verloren.` +
+        (meta.source_url ? " Achtung: Dieser Blueprint wurde importiert – ein erneuter Import überschreibt deine Änderungen." : ""), [["Abbrechen", false], ["Speichern", true, true]]);
+      if (!ok) return;
+      S.bp.warned = true;
+    }
+    const doc = { blueprint: meta };
+    for (const [k, v] of Object.entries(cfg)) if (k !== "id") doc[k] = v;
+    const yaml = HAB.toYaml(doc) + "\n";
+    $("save").disabled = true;
+    status("Speichere Blueprint …");
+    try {
+      try { await S.hass.callWS({ type: "blueprint/save", domain, path, yaml, allow_override: true }); }
+      catch (e) { if (/allow_override|extra keys/i.test(errText(e))) await S.hass.callWS({ type: "blueprint/save", domain, path, yaml }); else throw e; }
+      S.bp.isNew = false;
+      S.isNew = false;
+      S.bp.metaOrig = HAB.clone(meta);
+      S.original = cfg;
+      await refreshMeta();
+      status("✓ Blueprint gespeichert", "ok");
+    } catch (e) { status("Blueprint nicht gespeichert: " + errText(e), "warn"); }
+    $("save").disabled = false;
+    updateStatus();
+  }
+  async function newBlueprint(fromCfg, meta) {
+    const name = meta ? meta.name : ((await askText("Name des neuen Blueprints", "Neuer Blueprint")) || "").trim();
+    if (!name) return;
+    if (S.kind !== "blueprint") { if (!switchKind("blueprint", false)) return; }
+    else if (!confirmDiscard()) return;
+    const domain = meta ? meta.domain : "automation";
+    let path = `blockly/${slugify(name)}.yaml`;
+    for (let i = 2; (S.blueprints[domain] || {})[path]; i++) path = `blockly/${slugify(name)}_${i}.yaml`;
+    const m = meta || { name, description: "", domain, input: {} };
+    S.bp = { domain, path, meta: m, metaOrig: HAB.clone(m), isNew: true };
+    newItem(() => fromCfg || { triggers: [], conditions: [], actions: [], mode: "single" }, `${domain}:${path}`);
+    status(`✚ Neuer Blueprint (blueprints/${domain}/${path}) – Eingaben unter „🧩 Eigenschaften“, in Auswahllisten als „🧩 Eingabe“ wählbar.`, "ok");
+  }
+  // Aus der offenen Automation: gewählte Entitäten werden zu Eingaben.
+  async function blueprintFromCurrent() {
+    const cfg = currentConfig();
+    if (!cfg || !["automation", "script"].includes(S.kind)) { status("Bitte zuerst eine Automation oder ein Skript öffnen.", "warn"); return; }
+    const exact = new Set();
+    (function walk(v) { if (typeof v === "string") exact.add(v); else if (Array.isArray(v)) v.forEach(walk); else if (isObj(v)) Object.values(v).forEach(walk); })(cfg);
+    const ents = [...new Set(HAB.references(cfg, rootKind()).map((r) => r.entity))].filter((e) => exact.has(e));
+    const body = openModal("🧩 Blueprint aus dieser " + KIND_NAME());
+    body.innerHTML = `<p class="hint">Gewählte Entitäten werden zu Eingaben, die man beim Verwenden des Blueprints auswählt. (In Templates bleiben sie fest – HA erlaubt dort keine Eingaben.)</p>
+      <label>Name <input id="bpName" type="text" style="width:100%"></label><div id="bpEnts" class="bpEnts"></div>
+      <div class="askFoot"><button id="bpCancel">Abbrechen</button><button id="bpOk" class="primary">Blueprint anlegen</button></div>`;
+    $("bpName").value = (cfg.alias || "Blueprint") + " (Blueprint)";
+    for (const e of ents) {
+      const l = document.createElement("label");
+      l.className = "chk";
+      l.innerHTML = '<input type="checkbox" checked> <span></span> <code></code>';
+      l.querySelector("input").value = e;
+      l.querySelector("span").textContent = ename(e);
+      l.querySelector("code").textContent = e;
+      $("bpEnts").appendChild(l);
+    }
+    if (!ents.length) $("bpEnts").innerHTML = '<p class="hint">Keine Entitäten gefunden – der Blueprint bekommt keine Eingaben (später unter „🧩 Eigenschaften“ ergänzbar).</p>';
+    $("bpCancel").addEventListener("click", closeModal);
+    $("bpOk").addEventListener("click", () => {
+      const name = $("bpName").value.trim() || "Blueprint";
+      const chosen = [...$("bpEnts").querySelectorAll("input:checked")].map((x) => x.value);
+      const input = {}, map = {};
+      for (const e of chosen) {
+        let key = slugify(fname(S.hass.states[e]) || e.split(".")[1]);
+        for (let i = 2; key in input; i++) key = `${slugify(e)}_${i}`;
+        input[key] = { name: ename(e), selector: { entity: { filter: [{ domain: e.split(".")[0] }] } } };
+        map[e] = HAB.inputPlaceholder(key);
+      }
+      const sub = (v) => (typeof v === "string" ? (map[v] || v) : Array.isArray(v) ? v.map(sub) : isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)])) : v);
+      const body2 = sub(HAB.clone(cfg));
+      delete body2.id; delete body2.alias;
+      const description = body2.description || "";
+      delete body2.description;
+      closeModal();
+      newBlueprint(body2, { name, description, domain: rootKind() === "script" ? "script" : "automation", input });
+    });
+  }
+  function useBlueprint(a) {
+    const kind = a.domain === "script" ? "script" : "automation";
+    if (S.kind !== kind) { if (!switchKind(kind, false)) return; } else if (!confirmDiscard()) return;
+    const name = a.meta.name || "Aus Blueprint";
+    let id = String(Date.now());
+    if (kind === "script") {
+      const base = slugify(name), taken = new Set(itemList("script").map((x) => x.id));
+      id = base;
+      for (let i = 2; taken.has(id) || S.hass.states["script." + id]; i++) id = `${base}_${i}`;
+    }
+    newItem(() => ({ alias: name, description: "", use_blueprint: { path: a.path, input: {} } }), id);
+    status(`✚ Neue ${kind === "script" ? "Skript" : "Automation"} aus „${name}“ – Eingaben ausfüllen und speichern.`, "ok");
+  }
+  async function deleteBlueprint(a) {
+    const ok = await askChoice("Blueprint löschen", `„${a.name}“ (blueprints/${a.domain}/${a.path}) wird gelöscht. Das lässt sich nicht rückgängig machen. Home Assistant verweigert das, solange Automationen/Skripte ihn nutzen.`,
+      [["Abbrechen", false], ["Endgültig löschen", true, true]]);
+    if (!ok) return;
+    try {
+      await S.hass.callWS({ type: "blueprint/delete", domain: a.domain, path: a.path });
+      if (S.id === a.id) { S.id = null; S.original = null; S.bp = null; Blockly.Events.disable(); try { S.ws.clear(); } finally { Blockly.Events.enable(); } }
+      await refreshMeta();
+      status("🗑 Blueprint gelöscht", "ok");
+    } catch (e) { status("Nicht gelöscht: " + errText(e), "warn"); }
+  }
+  // Eigenschaften: Name, Beschreibung, Autor, Eingaben.
+  const SEL_TYPES = [["entity", "Entität"], ["target", "Ziel (Entität/Bereich/Gerät)"], ["area", "Bereich"], ["device", "Gerät"], ["number", "Zahl"],
+    ["boolean", "Ja/Nein"], ["text", "Text"], ["time", "Uhrzeit"], ["duration", "Dauer"], ["action", "Aktionen"]];
+  function bpProps() {
+    if (!S.bp) return;
+    const m = S.bp.meta;
+    const body = openModal("🧩 Blueprint-Eigenschaften");
+    body.innerHTML = `<div class="bpForm">
+      <label>Name <input id="bpN" type="text"></label>
+      <label>Beschreibung <textarea id="bpD" rows="3"></textarea></label>
+      <label>Autor <input id="bpA" type="text"></label>
+      <div class="hint">Datei: blueprints/${esc(S.bp.domain)}/${esc(S.bp.path)}${m.source_url ? " · importiert von " + esc(m.source_url) : ""}</div>
+      <h4>Eingaben</h4>
+      <div class="row"><input id="bpKey" type="text" placeholder="schluessel"><input id="bpKName" type="text" placeholder="Anzeigename"><select id="bpKType"></select><button id="bpAdd">＋ Eingabe</button></div>
+      <label>Alle Eingaben (JSON, für Einstellungen der Auswahl) <textarea id="bpI" rows="10" spellcheck="false"></textarea></label>
+      <div class="askFoot"><button id="bpX">Abbrechen</button><button id="bpSave" class="primary">Übernehmen</button></div></div>`;
+    $("bpN").value = m.name || ""; $("bpD").value = m.description || ""; $("bpA").value = m.author || "";
+    $("bpI").value = JSON.stringify(m.input || {}, null, 2);
+    for (const [v, l] of SEL_TYPES) $("bpKType").appendChild(new Option(l, v));
+    $("bpAdd").addEventListener("click", () => {
+      let inp; try { inp = JSON.parse($("bpI").value || "{}"); } catch (e) { alert("Eingaben: ungültiges JSON"); return; }
+      const key = slugify($("bpKey").value || $("bpKName").value || "eingabe");
+      inp[key] = { name: $("bpKName").value || key, selector: { [$("bpKType").value]: {} } };
+      $("bpI").value = JSON.stringify(inp, null, 2);
+      $("bpKey").value = $("bpKName").value = "";
+    });
+    $("bpX").addEventListener("click", closeModal);
+    $("bpSave").addEventListener("click", () => {
+      let inp; try { inp = JSON.parse($("bpI").value || "{}"); } catch (e) { alert("Eingaben: ungültiges JSON – " + e.message); return; }
+      const n = HAB.clone(m);
+      n.name = $("bpN").value.trim() || n.name;
+      if ($("bpD").value.trim() || n.description !== undefined) n.description = $("bpD").value;
+      if ($("bpA").value.trim()) n.author = $("bpA").value.trim(); else delete n.author;
+      n.input = inp;
+      S.bp.meta = n;
+      closeModal();
+      updateStatus(); updateTitle();
+      status("Eigenschaften übernommen – mit „Speichern“ in die Datei schreiben.", "ok");
+    });
+  }
+  $("tabScene").addEventListener("click", () => switchKind("scene"));
+  $("tabBp").addEventListener("click", () => switchKind("blueprint"));
+  $("bpPropsBtn").addEventListener("click", bpProps);
+
   // ---------- Anbindung ----------
   window.haBlockly = {
     setHass(hass) {
@@ -1886,7 +2199,7 @@
       if (first) {
         initWorkspace();
         renderCategorySelect();
-        S.kind = store("haBlockly.kind") === "script" ? "script" : "automation";
+        S.kind = KINDS.includes(store("haBlockly.kind")) ? store("haBlockly.kind") : "automation";
         renderTabs();
         S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
         S.metaCount = metaCount();
@@ -1925,11 +2238,14 @@
     b.addEventListener("click", () => { menu.classList.add("hidden"); newAutomation(t.cfg); });
     menu.appendChild(b);
   }
-  menu.insertAdjacentHTML("beforeend", '<div class="mh">Neues Skript</div>');
-  const sb = document.createElement("button");
-  sb.textContent = "📜 Skript (Funktion) anlegen …";
-  sb.addEventListener("click", () => { menu.classList.add("hidden"); newScript(); });
-  menu.appendChild(sb);
+  menu.insertAdjacentHTML("beforeend", '<div class="mh">Weitere</div>');
+  for (const [txt, fn] of [["📜 Skript (Funktion) anlegen …", () => newScript()], ["🎬 Szene anlegen …", () => newScene()],
+    ["🧩 Blueprint anlegen (leer) …", () => newBlueprint()], ["🧩 Blueprint aus dieser Automation / diesem Skript …", () => blueprintFromCurrent()]]) {
+    const b = document.createElement("button");
+    b.textContent = txt;
+    b.addEventListener("click", () => { menu.classList.add("hidden"); fn(); });
+    menu.appendChild(b);
+  }
   $("new").addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("hidden"); });
   document.addEventListener("click", (e) => { if (!menu.contains(e.target)) menu.classList.add("hidden"); });
   $("undo").addEventListener("click", () => S.ws && S.ws.undo(false));
