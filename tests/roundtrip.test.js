@@ -510,6 +510,39 @@ ok("version-b-timer-log", () => {
   } finally { HAB.hooks.extended = false; }
 });
 
+// 20f) Version B: „nach Typ wählen“ kennt die neuen Bausteine; Parameter lesbar.
+ok("version-b-katalog-parameter", () => {
+  HAB.hooks.extended = true;
+  try {
+    const svcs = [["script.helligkeit", "Helligkeit"], ["script.turn_on", ""], ["light.turn_on", ""]];
+    const acts = HAB.typeCatalog("action", svcs).flatMap((g) => g.items);
+    const labels = acts.map((i) => i.label);
+    for (const l of ["🧮 setze Zahl-Variable", "↩️ gib zurück", "⏲️ Timer starten", "📝 schreibe ins Log", "ƒ Helligkeit"]) assert.ok(labels.includes(l), l);
+    assert.ok(!labels.includes("ƒ script.turn_on"));
+    const trigs = HAB.typeCatalog("trigger").flatMap((g) => g.items).map((i) => i.label);
+    assert.ok(trigs.includes("⏲️ Timer abgelaufen"));
+    // Was der Dialog einsetzt (convertType), wird als passender Baustein erkannt und bleibt verlustfrei.
+    for (const i of acts.filter((x) => /Variable|gib zurück|Timer|Log|^ƒ/.test(x.label))) {
+      const item = HAB.convertType({}, i.item);
+      const b = toBlocks(item, "action");
+      assert.deepStrictEqual(HAB.blockToItem(b), item, i.label);
+      assert.ok(!b.getFieldValue("TITLE").includes("Dienst aufrufen"), i.label);
+    }
+    // Parameter: als „stufe, raum“ anzeigen, ändern ohne bestehende Angaben zu verlieren
+    const fn = HAB.NEW_FUNCTION("F", ["stufe"]);
+    fn.fields.stufe.selector = { number: { min: 0, max: 10 } };
+    const r = toBlocks(fn, "script");
+    const m = r.fieldMap_.find((x) => x.path === "fields");
+    assert.strictEqual(r.getFieldValue(m.name), "stufe");
+    assert.deepStrictEqual(HAB.blockToItem(r), fn);
+    r.setFieldValue("stufe, Raum Name", m.name);
+    const out = HAB.blockToItem(r);
+    assert.deepStrictEqual(Object.keys(out.fields), ["stufe", "raum_name"]);
+    assert.deepStrictEqual(out.fields.stufe.selector, { number: { min: 0, max: 10 } });
+  } finally { HAB.hooks.extended = false; }
+  assert.ok(!HAB.typeCatalog("action", []).some((g) => g.group === "Variablen"));
+});
+
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
 ok("wert-bausteine", () => {
   const HAV = HAB.HAV;

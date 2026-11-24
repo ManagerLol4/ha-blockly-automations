@@ -585,7 +585,10 @@
     return {
       title: "📜 Skript (Funktion)",
       colour: C.script,
-      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"), F("fields", "Eingaben (JSON)", { type: "json", show: hooks.blockly ? "always" : "present" })],
+      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"),
+        hooks.extended && (cfg.fields === undefined || isObj(cfg.fields))
+          ? F("fields", "Parameter", { type: "params", show: "always" })
+          : F("fields", "Eingaben (JSON)", { type: "json", show: hooks.blockly ? "always" : "present" })],
       lists: [L("sequence", "ABLAUF", "action")],
     };
   }
@@ -666,10 +669,14 @@
     return first;
   }
 
+  const paramName = (s) => String(s).trim().toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").replace(/^(\d)/, "_$1");
+
   // ---------- Feldwerte <-> HA-Werte ----------
   const LISTY = new Set(["entity", "state", "list", "triggerid", "area", "device", "floor"]);
   function toFieldString(v, f) {
     if (v === undefined) return "";
+    if (f.type === "params" && isObj(v)) return Object.keys(v).join(", ");
     if (Array.isArray(v) && LISTY.has(f.type) && v.every(isPrim)) return v.join(", ");
     if (isPrim(v)) return String(v);
     return JSON.stringify(v);
@@ -677,6 +684,12 @@
   function fromFieldString(val, f) {
     const orig = f.orig;
     if (f.type === "bool") return val === "true";
+    // Parameter einer Funktion: Namen mit Komma; bestehende Angaben (Name, Auswahl) bleiben erhalten.
+    if (f.type === "params") {
+      const o = {};
+      for (const n of val.split(",").map(paramName).filter(Boolean)) o[n] = isObj(orig) && orig[n] !== undefined ? orig[n] : { name: n, selector: { text: {} } };
+      return o;
+    }
     if (LISTY.has(f.type) && (Array.isArray(orig) || (orig === undefined && val.includes(",") && f.type !== "state"))) {
       return val.split(",").map((s) => s.trim()).filter(Boolean);
     }
@@ -2056,6 +2069,7 @@
         it("📣 Ereignis", { trigger: "event", event_type: "" }), it("💬 Sprachbefehl", { trigger: "conversation", command: "" }),
         it("📡 MQTT", { trigger: "mqtt", topic: "" }), it("🌐 Webhook", { trigger: "webhook", webhook_id: "", local_only: true }),
         it("🏷️ NFC-Tag", { trigger: "tag", tag_id: "" }), it("🔔 Benachrichtigung", { trigger: "persistent_notification", notification_id: "" })] },
+      ...(hooks.extended ? [{ group: "Timer", items: [it("⏲️ Timer abgelaufen", TIMER_FINISHED(), "nach „Timer starten“")] }] : []),
     ];
     if (kind === "condition") return [
       { group: "Entität", items: [it("🔎 Zustand ist", { condition: "state", entity_id: "", state: "" }), it("📏 Zahlenwert über/unter", { condition: "numeric_state", entity_id: "", below: 20 })] },
@@ -2079,7 +2093,20 @@
     }
     const byDomain = [...doms.entries()].sort((a, b) => String(domainName(a[0])).localeCompare(String(domainName(b[0])), "de"))
       .map(([d, items]) => ({ group: `Dienste: ${domainName(d) || d}`, items }));
+    const fnCalls = services.map((s) => (Array.isArray(s) ? s : [s, ""])).filter(([id]) => typeof id === "string" && id.startsWith("script.") && !SCRIPT_SERVICES.has(id.slice(7)))
+      .map(([id, n]) => it(`ƒ ${n || id}`, { action: id, response_variable: "ergebnis" }, "Funktion aufrufen, Ergebnis in „ergebnis“"));
+    const extended = hooks.extended ? [
+      { group: "Variablen", items: [
+        it("🧮 setze Zahl-Variable", { action: "input_number.set_value", target: { entity_id: "" }, data: { value: 0 } }, "globale Variable (Helfer)"),
+        it("🧮 setze Text-Variable", { action: "input_text.set_value", target: { entity_id: "" }, data: { value: "" } }, "globale Variable (Helfer)"),
+        it("🧮 setze Wahr/Falsch-Variable", { action: "input_boolean.turn_on", target: { entity_id: "" } }, "globale Variable (Helfer)")] },
+      { group: "Funktionen", items: [it("↩️ gib zurück", RETURN(0), "nur in einer Funktion (Skript)"), ...fnCalls] },
+      { group: "Timer & Log", items: [
+        it("⏲️ Timer starten", { action: "timer.start", target: { entity_id: "" } }), it("⏲️ Timer abbrechen", { action: "timer.cancel", target: { entity_id: "" } }),
+        it("📝 schreibe ins Log", { action: "system_log.write", data: { message: "", level: "info" } }, "Einstellungen → System → Protokolle")] },
+    ] : [];
     return [
+      ...extended,
       { group: "Häufig", items: [it("▶️ Dienst aufrufen …", { action: "" }, "beliebiger Dienst"), it("🎬 Szene aktivieren", { scene: "" }),
         it("📜 Skript ausführen", { action: "script.turn_on", target: { entity_id: "" } }), it("🔔 Benachrichtigung", { action: "persistent_notification.create", data: { message: "" } })] },
       { group: "Ablauf", items: [it("❓ Wenn … dann … sonst", { if: [], then: [], else: [] }), it("🔀 Auswahl (mehrere Fälle)", { choose: [{ conditions: [], sequence: [] }] }),

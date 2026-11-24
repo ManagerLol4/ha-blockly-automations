@@ -63,6 +63,9 @@ Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
   - **Log** (Kategorie *Text*): *📝 schreibe ins Log …* mit Stufe (Info, Warnung, Fehler …) –
     erscheint unter *Einstellungen → System → Protokolle* (`system_log.write`).
 
+Alle diese Bausteine gibt es in Version B auch im Dialog *＋ … nach Typ wählen*. Die Parameter einer Funktion
+stehen als lesbare Liste im Skript-Kopf (*Parameter: stufe, raum*).
+
 Auch Version B speichert nur normale HA-Automationen und Helfer. Beim Zurückwechseln auf A läuft alles
 weiter, die Bausteine erscheinen dann als normale Dienstaufrufe (z. B. *Zahlen-Helfer Wert setzen*).
 
