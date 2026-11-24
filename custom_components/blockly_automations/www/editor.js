@@ -771,6 +771,7 @@
     S.ws.registerButtonCallback("newScript", () => newScript());
     S.ws.registerButtonCallback("newGlobalVar", () => newGlobalVar());
     S.ws.registerButtonCallback("newFunction", () => newFunction());
+    S.ws.registerButtonCallback("newTimer", () => newTimer());
     S.ws.registerButtonCallback("addTrigger", rootAdd(0, "trigger"));
     S.ws.registerButtonCallback("addCondition", rootAdd(1, "condition"));
     S.ws.registerButtonCallback("addAction", rootAdd(2, "action"));
@@ -1306,6 +1307,33 @@
   }
   const slugify = (name) => name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "skript";
+  // Version B: Timer = Helfer „timer“. Danach liegen „Timer starten“ und „Timer abgelaufen“ bereit.
+  async function newTimer() {
+    const name = ((await askText("Name des neuen Timers", "", "z. B. „Licht Flur aus“")) || "").trim();
+    if (!name) return;
+    let dur = await askText("Dauer", "00:05:00", "Stunden:Minuten:Sekunden – beim Starten lässt sie sich auch einzeln angeben.");
+    if (dur === null) return;
+    dur = dur.trim() || "00:05:00";
+    if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(dur)) { status("Dauer bitte als HH:MM:SS angeben, z. B. 00:05:00", "warn"); return; }
+    let res;
+    try { res = await S.hass.callWS({ type: "timer/create", name, duration: dur, restore: true, icon: "mdi:timer-outline" }); }
+    catch (e) { status("Timer konnte nicht angelegt werden: " + errText(e), "err"); return; }
+    const eid = `timer.${(res && res.id) || slugify(name)}`;
+    try {
+      const m = S.ws.getMetricsManager().getViewMetrics(true);
+      const a = HAB.itemToBlockJson("action", { action: "timer.start", target: { entity_id: eid } });
+      a.x = m.left + 40; a.y = m.top + 40;
+      Blockly.serialization.blocks.append(a, S.ws);
+      if (S.kind === "automation") {
+        const t = HAB.itemToBlockJson("trigger", HAB.TIMER_FINISHED(eid));
+        t.x = m.left + 40; t.y = m.top + 200;
+        Blockly.serialization.blocks.append(t, S.ws);
+      }
+    } catch (e) { /* Bausteine sind optional */ }
+    setTimeout(() => S.ws && S.ws.updateToolbox(HAB.buildToolbox(rootKind())), 500);
+    status(`Timer „${name}“ angelegt (${eid}). „Timer starten“ und „Timer abgelaufen“ liegen oben links bereit.`, "ok");
+  }
+
   // Version B: Funktion = Skript mit Parametern (fields) und „gib zurück“. Läuft parallel, damit mehrere Aufrufe gleichzeitig gehen.
   async function newFunction() {
     const name = ((await askText("Name der neuen Funktion", "", "z. B. „Helligkeit berechnen“")) || "").trim();

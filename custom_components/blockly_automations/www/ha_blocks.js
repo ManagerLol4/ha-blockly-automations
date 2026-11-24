@@ -185,6 +185,7 @@
     const mk = (title, fields, colour = C.trigger, extra = {}) => ({
       title, colour, fields: [...fields, F("id", "ID", { adv: true })], lists: [], ...extra,
     });
+    if (isTimerFinished(t)) return mk("⏲️ Timer abgelaufen", [F("event_data.entity_id", "", { type: "entity", domains: ["timer"] })]);
     switch (p) {
       case "state":
         return mk("🔁 Zustand ändert sich", [
@@ -382,6 +383,9 @@
       if (isObj(d)) return mk("⏱️ Warten", duration(a, "delay", ""), [], C.flow);
       return mk("⏱️ Warten", [F("delay", "", { numeric: typeof d === "number" })], [], C.flow);
     }
+    // Version B: „schreibe ins Log“ = system_log.write
+    if (isLogWrite(a)) return mk("📝 schreibe ins Log", [F("data.message", "", { type: "text" }), F("data.level", "Stufe", { type: "select", options: LOG_LEVELS }),
+      P("data.logger", "Logger")], [], C.flow);
     // Version B: Helfer als globale Variable („setze Variable … auf …“). Ist ein normaler Dienstaufruf.
     const gv = gvarSet(a);
     if (gv) {
@@ -438,7 +442,8 @@
   };
   const SVC_WORDS = { turn_on: "einschalten", turn_off: "ausschalten", toggle: "umschalten", open_cover: "öffnen", close_cover: "schließen",
     stop_cover: "stoppen", set_value: "Wert setzen", select_option: "Option wählen", press: "drücken", reload: "neu laden", trigger: "auslösen",
-    lock: "abschließen", unlock: "aufschließen", set_temperature: "Temperatur setzen", set_hvac_mode: "Modus setzen" };
+    lock: "abschließen", unlock: "aufschließen", set_temperature: "Temperatur setzen", set_hvac_mode: "Modus setzen",
+    start: "starten", cancel: "abbrechen", pause: "pausieren", finish: "beenden", change: "ändern" };
   const DOMAIN_DE = { light: "Licht", switch: "Schalter", fan: "Ventilator", climate: "Heizung", cover: "Rollladen", lock: "Schloss",
     media_player: "Medienplayer", notify: "Nachricht", scene: "Szene", script: "Skript", automation: "Automation", homeassistant: "Gerät",
     input_boolean: "Schalter-Helfer", input_number: "Zahlen-Helfer", input_select: "Auswahl-Helfer", input_text: "Text-Helfer",
@@ -472,6 +477,23 @@
     if (!n && d === "script") { try { n = String(hooks.entityName(svc) || "").replace(/^·\s*/, ""); } catch (e) { n = ""; } }
     if (!n) n = `${DOMAIN_DE[d] || hooks.domainName(d) || d} ${SVC_WORDS[s] || s.replace(/_/g, " ")}`;
     return `${icon} ${n}`;
+  }
+
+  // Version B: Timer (wie „Timeout“ bei ioBroker) – Auslöser „Timer abgelaufen“ = Ereignis timer.finished.
+  function isTimerFinished(t) {
+    if (!hooks.extended || !isObj(t) || t.trigger !== "event" || t.event_type !== "timer.finished") return false;
+    if (Object.keys(t).some((k) => !["trigger", "event_type", "event_data", "id", "alias", "enabled", "variables"].includes(k))) return false;
+    const d = t.event_data === undefined ? {} : t.event_data;
+    return isObj(d) && Object.keys(d).every((k) => k === "entity_id") && (d.entity_id === undefined || typeof d.entity_id === "string");
+  }
+  const TIMER_FINISHED = (entity = "") => ({ trigger: "event", event_type: "timer.finished", event_data: { entity_id: entity } });
+  // Version B: „schreibe ins Log“ (system_log.write, erscheint unter Einstellungen → System → Protokolle).
+  const LOG_LEVELS = [["(Standard: Warnung)", ""], ["Debug", "debug"], ["Info", "info"], ["Warnung", "warning"], ["Fehler", "error"], ["Kritisch", "critical"]];
+  function isLogWrite(a) {
+    if (!hooks.extended || !isObj(a) || a.action !== "system_log.write") return false;
+    if (Object.keys(a).some((k) => !["action", "data", "alias", "enabled", "continue_on_error"].includes(k))) return false;
+    const d = a.data === undefined ? {} : a.data;
+    return isObj(d) && Object.keys(d).every((k) => ["message", "level", "logger"].includes(k)) && Object.values(d).every(isPrim);
   }
 
   /* Version B: Funktionen = Skripte mit Eingaben (fields) und Rückgabewert.
@@ -1393,6 +1415,14 @@
           V("var", { v: "repeat.index" }),
         ]),
         cat("Zeit", C.flow, [
+          ...(hooks.extended ? [
+            label("Timer – läuft im Hintergrund weiter, auch über einen Neustart (in HA ein Helfer):"),
+            btn("＋ Neuen Timer anlegen …", "newTimer"),
+            tb("action", { action: "timer.start", target: { entity_id: "" } }),
+            tb("action", { action: "timer.cancel", target: { entity_id: "" } }),
+            label("Auslöser, wenn der Timer abgelaufen ist:"),
+            tb("trigger", TIMER_FINISHED()),
+          ] : []),
           label("Warten"),
           tb("action", { delay: { hours: 0, minutes: 1, seconds: 0 } }),
           tb("action", { wait_template: "", timeout: { minutes: 5 }, continue_on_timeout: true }),
@@ -1411,6 +1441,11 @@
           V("txt"),
           V("join", null, { A: sh("txt", { s: "Temperatur: " }), B: sh("state") }),
           V("totext"),
+          ...(hooks.extended ? [
+            label("Ausgeben:"),
+            tb("action", { action: "system_log.write", data: { message: "", level: "info" } }),
+            tb("action", { action: "logbook.log", data: { name: "", message: "" } }),
+          ] : []),
         ]),
         cat("Werte aus HA", 30, [
           V("state"), V("statenum"), V("attr"), V("isstate"),
@@ -2072,7 +2107,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { RETURN, NEW_FUNCTION, isReturn, serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { TIMER_FINISHED, RETURN, NEW_FUNCTION, isReturn, serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

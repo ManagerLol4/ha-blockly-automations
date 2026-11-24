@@ -118,10 +118,10 @@
           if (c.condition === "state") return { result: [].concat(c.state).includes((states[c.entity_id] || {}).state) };
           throw { message: "nicht unterstützt" };
         }
-        case "input_number/create": case "input_text/create": case "input_boolean/create": {
+        case "timer/create": case "input_number/create": case "input_text/create": case "input_boolean/create": {
           const dom = msg.type.split("/")[0];
           const id = msg.name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-          const s = st(`${dom}.${id}`, dom === "input_boolean" ? "off" : dom === "input_number" ? "0.0" : "", { friendly_name: msg.name });
+          const s = st(`${dom}.${id}`, dom === "timer" ? "idle" : dom === "input_boolean" ? "off" : dom === "input_number" ? "0.0" : "", { friendly_name: msg.name });
           states[s.entity_id] = s;
           return { id, name: msg.name };
         }

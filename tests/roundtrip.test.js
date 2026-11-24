@@ -485,6 +485,31 @@ ok("version-b-funktionen", () => {
   } finally { HAB.hooks.extended = false; }
 });
 
+// 20e) Version B: Timer und Log.
+ok("version-b-timer-log", () => {
+  HAB.hooks.extended = true;
+  try {
+    const auto = { alias: "t", triggers: [{ ...HAB.TIMER_FINISHED("timer.flur"), id: "ab" }], actions: [
+      { action: "timer.start", target: { entity_id: "timer.flur" }, data: { duration: "00:02:00" } },
+      { action: "system_log.write", data: { message: "Hallo", level: "info" } },
+      { action: "system_log.write", data: { message: HAB.HAV.compile({ k: "join", a: [{ k: "txt", f: { s: "T: " } }, { k: "state", f: { e: "sensor.t" } }] }) } },
+    ] };
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(auto)), auto);
+    assert.ok(toBlocks(auto.triggers[0], "trigger").getFieldValue("TITLE").includes("Timer abgelaufen"));
+    const lb = toBlocks(auto.actions[1], "action");
+    assert.ok(lb.getFieldValue("TITLE").includes("Log"));
+    const m = lb.fieldMap_.find((x) => x.path === "data.level");
+    lb.setFieldValue("error", m.name);
+    assert.strictEqual(HAB.blockToItem(lb).data.level, "error");
+    assert.ok(HAB.serviceTitle("timer.start").startsWith("⏲️"));
+    // Ereignis mit anderen Daten bleibt ein normales Ereignis
+    assert.ok(!toBlocks({ trigger: "event", event_type: "timer.finished", event_data: { x: 1 } }, "trigger").getFieldValue("TITLE").includes("Timer"));
+    HAB.hooks.extended = false;
+    assert.ok(!toBlocks(auto.triggers[0], "trigger").getFieldValue("TITLE").includes("Timer abgelaufen"));
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(auto)), auto);
+  } finally { HAB.hooks.extended = false; }
+});
+
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
 ok("wert-bausteine", () => {
   const HAV = HAB.HAV;

@@ -57,6 +57,11 @@ Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
     liefert die Funktion einen Wert. Beim Aufruf (*ƒ Funktion: …*) landet das Ergebnis in einer Variable,
     gelesen wird es mit *Ergebnis von …*. In HA ist das ein Skript mit `fields`, `stop` +
     `response_variable` und ein Aufruf mit `response_variable` (Ergebnis unter `ergebnis.wert`).
+  - **Timer** (Kategorie *Zeit*): *＋ Neuen Timer anlegen …* legt einen Timer-Helfer an. Dazu gibt es
+    *Timer starten/abbrechen* und den Auslöser *⏲️ Timer abgelaufen* (Ereignis `timer.finished`).
+    So baut man ein „Licht nach 5 Minuten aus“, das auch einen Neustart übersteht.
+  - **Log** (Kategorie *Text*): *📝 schreibe ins Log …* mit Stufe (Info, Warnung, Fehler …) –
+    erscheint unter *Einstellungen → System → Protokolle* (`system_log.write`).
 
 Auch Version B speichert nur normale HA-Automationen und Helfer. Beim Zurückwechseln auf A läuft alles
 weiter, die Bausteine erscheinen dann als normale Dienstaufrufe (z. B. *Zahlen-Helfer Wert setzen*).
