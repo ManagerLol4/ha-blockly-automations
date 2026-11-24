@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blockly Automations – Test ohne HA</title>
+  <style>html, body { margin: 0; height: 100%; } iframe { border: 0; width: 100%; height: 100%; display: block; }</style>
+</head>
+<body>
+<!-- Entwicklung ohne Home Assistant: `npm run dev` und http://localhost:8790/tests/dev/mock.html öffnen.
+     Stellt ein kleines, erfundenes HA nach (Zustände, Dienste, Konfig-API, Traces, test_condition). -->
+<iframe id="f"></iframe>
+<script>
+  const st = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes: { friendly_name: entity_id, ...attributes }, last_changed: new Date().toISOString() });
+  const states = {};
+  [
+    st("automation.licht_flur", "on", { id: "1001", friendly_name: "Flur: Licht – Bewegung" }),
+    st("automation.fenster_offen", "on", { id: "1002", friendly_name: "Bad: Fenster lange offen" }),
+    st("script.licht_szene", "off", { friendly_name: "Licht-Szene für einen Raum" }),
+    st("binary_sensor.flur_bewegung", "off", { friendly_name: "Flur Bewegung" }),
+    st("binary_sensor.bad_fenster", "on", { friendly_name: "Bad Fenster" }),
+    st("light.flur", "off", { friendly_name: "Flur Licht" }),
+    st("input_boolean.nachtmodus", "off", { friendly_name: "Nachtmodus" }),
+    st("sun.sun", "below_horizon", { friendly_name: "Sonne" }),
+  ].forEach((s) => (states[s.entity_id] = s));
+  const configs = {
+    "automation/1001": {
+      id: "1001", alias: "Flur: Licht – Bewegung", description: "", mode: "single",
+      triggers: [
+        { trigger: "state", entity_id: "binary_sensor.flur_bewegung", to: "on", id: "bewegung" },
+        { trigger: "state", entity_id: "binary_sensor.flur_bewegung", to: "off", for: { minutes: 2 }, id: "ruhe" },
+      ],
+      conditions: [{ condition: "state", entity_id: "input_boolean.nachtmodus", state: "off" }],
+      actions: [{ choose: [
+        { conditions: [{ condition: "trigger", id: "bewegung" }], sequence: [{ action: "script.licht_szene", data: { raum: "flur" } }] },
+        { conditions: [{ condition: "trigger", id: "ruh" }], sequence: [{ alias: "Licht aus", action: "light.turn_off", target: { entity_id: "light.flur" } }, { delay: { hours: 2 } }] },
+      ] }],
+    },
+    "automation/1002": {
+      id: "1002", alias: "Bad: Fenster lange offen", mode: "single",
+      triggers: [{ trigger: "state", entity_id: "binary_sensor.bad_fenster", to: "on", for: { minutes: 15 } }],
+      conditions: [], actions: [{ action: "persistent_notification.create", data: { title: "Fenster", message: "{{ states('binary_sensor.bad_fenster') }} seit 15 Minuten" } }],
+    },
+    "script/licht_szene": {
+      alias: "Licht-Szene für einen Raum", description: "",
+      fields: { raum: { name: "Raum", selector: { area: {} } } },
+      sequence: [{ action: "light.turn_on", target: { area_id: "{{ raum }}" } }], mode: "parallel",
+    },
+  };
+  const t0 = new Date(Date.now() - 60000).toISOString();
+  const traces = {
+    "automation/1001": [{
+      run_id: "r1", timestamp: { start: t0, finish: t0 }, state: "stopped", script_execution: "finished", trigger: "state of binary_sensor.flur_bewegung",
+      trace: {
+        "trigger/0": [{ path: "trigger/0", timestamp: t0, changed_variables: { trigger: { id: "bewegung", to_state: { state: "on" } } } }],
+        "condition/0": [{ path: "condition/0", timestamp: t0, result: { result: true } }],
+        "action/0": [{ path: "action/0", timestamp: t0, result: { choice: 0 } }],
+        "action/0/choose/0/conditions/0": [{ path: "action/0/choose/0/conditions/0", timestamp: t0, result: { result: true } }],
+        "action/0/choose/0/sequence/0": [{ path: "action/0/choose/0/sequence/0", timestamp: t0, error: "Raum nicht gefunden" }],
+      },
+    }],
+  };
+  const layouts = {};
+  const svc = (fields = {}, target = { entity: {} }) => ({ fields, target });
+  const hass = {
+    states, user: { is_admin: true }, themes: { darkMode: false }, areas: {}, devices: {}, floors: {},
+    services: {
+      light: { turn_on: svc({ brightness_pct: { selector: { number: { min: 0, max: 100 } } } }), turn_off: svc() },
+      persistent_notification: { create: svc({ title: { selector: { text: {} } }, message: { selector: { text: {} } } }, null) },
+      script: { licht_szene: svc({ raum: { name: "Raum", selector: { area: {} } } }, null), turn_on: svc() },
+      automation: { turn_on: svc(), turn_off: svc(), trigger: svc() },
+    },
+    localize: () => "",
+    formatEntityState: (s, v) => (v !== undefined ? v : s.state),
+    log: [],
+    async callApi(method, path, body) {
+      this.log.push([method, path]);
+      const key = path.replace(/^config\//, "").replace("/config/", "/");
+      if (method === "GET") { if (!configs[key]) throw { body: { message: "Not found" } }; return JSON.parse(JSON.stringify(configs[key])); }
+      configs[key] = JSON.parse(JSON.stringify(body));
+      if (key.startsWith("automation/")) configs[key].id = key.split("/")[1];
+      return { result: "ok" };
+    },
+    async callWS(msg) {
+      this.log.push([msg.type]);
+      switch (msg.type) {
+        case "config/category_registry/list": return msg.scope === "automation" ? [{ category_id: "c1", name: "Licht" }] : [];
+        case "config/entity_registry/get_entries": return { "automation.licht_flur": { categories: { automation: "c1" } }, "script.licht_szene": { unique_id: "licht_szene", categories: {} } };
+        case "blueprint/list": return {};
+        case "trace/list": return (traces[`${msg.domain}/${msg.item_id}`] || []).map(({ trace, ...r }) => r);
+        case "trace/get": return { ...(traces[`${msg.domain}/${msg.item_id}`] || []).find((t) => t.run_id === msg.run_id), config: configs[`${msg.domain}/${msg.item_id}`] };
+        case "test_condition": {
+          const c = msg.condition;
+          if (c.condition === "state") return { result: [].concat(c.state).includes((states[c.entity_id] || {}).state) };
+          throw { message: "nicht unterstützt" };
+        }
+        case "blockly_automations/layout/get": return layouts[msg.key] || null;
+        case "blockly_automations/layout/set": layouts[msg.key] = msg.layout; return null;
+        default: throw { message: "unbekannt: " + msg.type };
+      }
+    },
+    callService: async () => {},
+    connection: { subscribeMessage: (cb, msg) => { setTimeout(() => cb({ result: "(Test) " + msg.template.slice(0, 40) }), 50); return Promise.resolve(() => {}); } },
+  };
+  window.__mock = { hass, configs, layouts };
+  document.getElementById("f").src = "../../custom_components/blockly_automations/www/editor.html?v=dev" + Date.now();
+  document.getElementById("f").addEventListener("load", () => {
+    const w = document.getElementById("f").contentWindow;
+    const go = () => (w.haBlockly ? w.haBlockly.setHass(hass) : setTimeout(go, 50));
+    go();
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "alias": "Licht-Szene für einen Raum",
+  "description": "Schaltet die Lichter eines Raums mit Helligkeit ein.",
+  "fields": {
+    "raum": { "name": "Raum", "required": true, "selector": { "area": {} } },
+    "helligkeit": { "name": "Helligkeit", "default": 80, "selector": { "number": { "min": 1, "max": 100 } } }
+  },
+  "sequence": [
+    { "alias": "Lichter an", "action": "light.turn_on", "target": { "area_id": "{{ raum }}" }, "data": { "brightness_pct": "{{ helligkeit }}" } },
+    { "condition": "state", "entity_id": "input_boolean.nachtmodus", "state": "off" },
+    { "delay": { "minutes": 5 } }
+  ],
+  "mode": "parallel",
+  "max": 5,
+  "icon": "mdi:lightbulb-group"
+}

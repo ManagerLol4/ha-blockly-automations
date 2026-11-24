@@ -1,0 +1,21 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  roundtrip:
+    name: Rundlauf-Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - name: Syntax der Frontend-Dateien
+        run: for f in custom_components/blockly_automations/www/*.js; do node --check "$f"; done
+      - name: Python kompilierbar
+        run: python3 -m py_compile custom_components/blockly_automations/*.py

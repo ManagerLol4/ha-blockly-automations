@@ -1,0 +1,12 @@
+{
+  "alias": "Bewegungslicht Flur",
+  "description": "",
+  "use_blueprint": {
+    "path": "homeassistant/motion_light.yaml",
+    "input": {
+      "motion_entity": "binary_sensor.flur_bewegung",
+      "light_target": { "entity_id": "light.flur" },
+      "no_motion_wait": 120
+    }
+  }
+}

@@ -195,6 +195,136 @@ ok("fehlt", () => {
   assert.ok(!HAB.missingInfo({ trigger: "button.pressed", target: { area_id: "badezimmer" } }));
 });
 
+// 14) Skripte (Funktionen) überstehen den Rundlauf; Werkzeugkasten für Skripte ohne Auslöser.
+ok("skript", () => {
+  const sdir = path.join(dir, "script");
+  for (const f of fs.readdirSync(sdir).filter((x) => x.endsWith(".json"))) {
+    const cfg = JSON.parse(fs.readFileSync(path.join(sdir, f), "utf8"));
+    const r = toBlocks(cfg, "script");
+    assert.strictEqual(r.type, "ha_script");
+    assert.deepStrictEqual(HAB.blockToItem(r), cfg, `Skript ${f}`);
+    // Name ändern, Rest bleibt
+    r.setFieldValue("Neu", field(r, "alias"));
+    assert.deepStrictEqual(HAB.blockToItem(r), { ...cfg, alias: "Neu" });
+  }
+  const neu = HAB.NEW_SCRIPT("Test");
+  assert.deepStrictEqual(HAB.blockToItem(toBlocks(neu, "script")), neu);
+  const names = HAB.buildToolbox("script").contents.map((c) => c.name);
+  assert.ok(!names.includes("Auslöser") && names.includes("Skripte (Funktionen)"));
+  HAB.hooks.scripts = () => [["script.licht", "Licht"], ["light.x", "kein Skript"]];
+  const cat = HAB.buildToolbox("root").contents.find((c) => c.name === "Skripte (Funktionen)");
+  const blocks = cat.contents.filter((x) => x.kind === "block");
+  assert.deepStrictEqual(blocks.map((b) => b.extraState.raw), [{ action: "script.licht" }]);
+  assert.deepStrictEqual(HAB.blockToItem(toBlocks(blocks[0].extraState.raw, "action")), { action: "script.licht" });
+  HAB.hooks.scripts = () => [];
+});
+
+// 15) Blueprint-Automation: Eingaben als Felder (mit und ohne Metadaten), verlustfrei.
+ok("blueprint", () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, "blueprint.json"), "utf8"));
+  let r = toBlocks(cfg);
+  assert.deepStrictEqual(HAB.blockToItem(r), cfg);
+  r.setFieldValue("light.diele", field(r, "use_blueprint.input.motion_entity"));
+  assert.strictEqual(HAB.blockToItem(r).use_blueprint.input.motion_entity, "light.diele");
+  HAB.hooks.blueprintInputs = () => ({
+    motion_entity: { name: "Bewegungsmelder", selector: { entity: { domain: "binary_sensor" } } },
+    sec: { name: "Abschnitt", input: { no_motion_wait: { name: "Wartezeit", selector: { number: {} } }, extra: { name: "Neu", selector: { text: {} } } } },
+  });
+  r = toBlocks(cfg);
+  assert.deepStrictEqual(HAB.blockToItem(r), cfg, "Blueprint mit Metadaten");
+  assert.ok(r.fieldMap_.some((f) => f.path === "use_blueprint.input.extra"));
+  r.setFieldValue("90", field(r, "use_blueprint.input.no_motion_wait"));
+  assert.strictEqual(HAB.blockToItem(r).use_blueprint.input.no_motion_wait, 90);
+  HAB.hooks.blueprintInputs = () => null;
+  assert.deepStrictEqual(HAB.lint(cfg), []);
+  assert.deepStrictEqual(HAB.references(cfg).map((x) => x.entity).sort(), ["binary_sensor.flur_bewegung", "light.flur"]);
+});
+
+// 16) Pfade wie in HA-Traces – aus der Konfiguration und aus den Blöcken identisch.
+ok("pfade", () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, "licht_choose.json"), "utf8"));
+  const fromCfg = [];
+  HAB.walkConfig(cfg, "root", (item, kind, p) => fromCfg.push(p));
+  const fromBlocks = [...HAB.collectPaths(toBlocks(cfg)).keys()];
+  assert.deepStrictEqual(fromBlocks, fromCfg);
+  assert.ok(fromCfg.includes("trigger/0") && fromCfg.includes("action/0"));
+  const deep = { triggers: [{ trigger: "state", entity_id: "a.b" }], actions: [
+    { choose: [{ conditions: [{ condition: "state", entity_id: "a.b", state: "on" }], sequence: [{ delay: 1 }] }], default: [{ delay: 2 }] },
+    { if: [{ condition: "template", value_template: "{{ true }}" }], then: [{ delay: 3 }] },
+    { repeat: { while: [{ condition: "state", entity_id: "a.b", state: "on" }], sequence: [{ delay: 4 }] } },
+  ] };
+  const ps = [...HAB.collectPaths(toBlocks(deep)).keys()];
+  for (const p of ["action/0/choose/0", "action/0/choose/0/conditions/0", "action/0/choose/0/sequence/0", "action/0/default/0",
+    "action/1/if/0", "action/1/then/0", "action/2/repeat/while/0", "action/2/repeat/sequence/0"]) assert.ok(ps.includes(p), p);
+  const sp = [...HAB.collectPaths(toBlocks({ sequence: [{ delay: 1 }, { if: [], then: [{ delay: 2 }] }] }, "script")).keys()];
+  assert.deepStrictEqual(sp, ["", "sequence/0", "sequence/1", "sequence/1/then/0"]);
+});
+
+// 17) Trigger-IDs und Prüfregeln.
+ok("pruefregeln", () => {
+  const cfg = {
+    triggers: [{ trigger: "state", entity_id: "binary_sensor.b", to: "on", id: "an" }, { trigger: "state", entity_id: "binary_sensor.b", to: "off", for: { hours: 2 }, id: "aus" }],
+    actions: [
+      { choose: [{ conditions: [{ condition: "trigger", id: ["an", "tippfehler"] }], sequence: [{ delay: { minutes: 3 } }] }] },
+      { if: [{ condition: "state", entity_id: "a.b", state: "on" }], then: [], else: [] },
+    ],
+  };
+  assert.deepStrictEqual(HAB.triggerIds(cfg), ["an", "aus"]);
+  const h = HAB.lint(cfg);
+  const at = (p) => h.filter((x) => x.path === p).map((x) => x.msg).join(" | ");
+  assert.match(at("action/0/choose/0/conditions/0"), /tippfehler/);
+  assert.doesNotMatch(at("action/0/choose/0/conditions/0"), /„an“/);
+  assert.match(at("trigger/1"), /Neustart/);
+  assert.match(at("action/0/choose/0/sequence/0"), /single/);
+  assert.match(at("action/1"), /keine Wirkung|ohne Aktionen/);
+  assert.match(HAB.lint({ actions: [] }).map((x) => x.msg).join(), /keinen Auslöser/);
+  // restart: kein single-Hinweis; kurze Wartezeit: kein Timer-Hinweis
+  const ok2 = HAB.lint({ mode: "restart", triggers: [{ trigger: "time", at: "07:00:00" }], actions: [{ delay: { minutes: 3 } }] });
+  assert.deepStrictEqual(ok2, []);
+  assert.deepStrictEqual(HAB.lint({ sequence: [{ delay: "02:00:00" }] }, "script").map((x) => x.path), ["sequence/0"]);
+  assert.strictEqual(HAB.durationSeconds("01:30:00"), 5400);
+  assert.strictEqual(HAB.durationSeconds({ minutes: 2, seconds: 5 }), 125);
+  assert.strictEqual(HAB.durationSeconds("{{ x }}"), null);
+});
+
+// 18) Trigger-ID-Feld bleibt verlustfrei (Text und Liste).
+ok("trigger-id-feld", () => {
+  for (const id of ["an", ["an", "aus"]]) {
+    const c = { condition: "trigger", id };
+    const b = toBlocks(c, "condition");
+    assert.deepStrictEqual(HAB.blockToItem(b), c);
+  }
+  const b = toBlocks({ condition: "trigger", id: ["an"] }, "condition");
+  b.setFieldValue("an, aus", field(b, "id"));
+  assert.deepStrictEqual(HAB.blockToItem(b).id, ["an", "aus"]);
+});
+
+// 19) Querverweise: Rollen, Templates, Skript-Aufrufe.
+ok("querverweise", () => {
+  const cfg = {
+    triggers: [{ trigger: "state", entity_id: ["binary_sensor.tuer", "binary_sensor.fenster"] }, { trigger: "numeric_state", entity_id: "sensor.t", above: "input_number.grenze" }],
+    conditions: [{ condition: "template", value_template: "{{ is_state('person.anna', 'home') and states.sun.sun.state == 'below_horizon' }}" }],
+    actions: [
+      { action: "light.turn_on", target: { entity_id: "light.flur" }, data: { brightness: "{{ states('sensor.hell') | int }}" } },
+      { action: "script.licht_szene", data: { raum: "flur" } },
+      { action: "script.turn_on", target: { entity_id: "script.andere" } },
+      { if: [{ condition: "state", entity_id: "input_boolean.x", state: "on" }], then: [{ scene: "scene.abend" }] },
+    ],
+  };
+  const r = HAB.references(cfg);
+  const has = (e, role) => r.some((x) => x.entity === e && x.role === role);
+  assert.ok(has("binary_sensor.tuer", "trigger") && has("binary_sensor.fenster", "trigger"));
+  assert.ok(has("input_number.grenze", "trigger"));
+  assert.ok(has("person.anna", "condition") && has("sun.sun", "condition"));
+  assert.ok(has("light.flur", "action") && has("sensor.hell", "action"));
+  assert.ok(has("script.licht_szene", "call") && has("script.andere", "action"));
+  assert.ok(has("input_boolean.x", "condition") && has("scene.abend", "action"));
+  assert.ok(r.find((x) => x.entity === "scene.abend").path === "action/3/then/0");
+  // Template-Bedingung in Kurzform (String)
+  const s = HAB.references({ triggers: [], conditions: ["{{ is_state('light.a','on') }}"], actions: [] });
+  assert.deepStrictEqual(s.map((x) => [x.entity, x.role, x.path]), [["light.a", "condition", "condition/0"]]);
+});
+
 // 13) Versionsnummern stimmen überein (manifest, package.json, version.json).
 ok("version", () => {
   const read = (...p) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", ...p), "utf8")).version;

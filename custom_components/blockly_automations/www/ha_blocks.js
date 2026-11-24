@@ -80,6 +80,11 @@
     simple: false,               // Einfach-Modus: Klartext statt Eingabefelder
     pickField: null,             // (block, chip) -> Auswahlfenster für eine Option
     chipText: () => "",          // (chip, value, raw) -> Anzeige des Werts
+    triggerIds: () => [],        // () -> ["bewegung", ...] Trigger-IDs der offenen Automation
+    blueprintInputs: () => null, // (path, kind) -> {key: {name, selector}} Eingaben eines Blueprints
+    scripts: () => [],           // () -> [["script.x", "Name"], ...] für den Werkzeugkasten
+    renameBlock: null,           // (block) -> Name (alias) eines Schritts setzen
+    editScriptFields: null,      // (block) -> Eingaben eines Skripts bearbeiten
   };
 
   // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
@@ -118,7 +123,7 @@
   }
 
   // ---------- Farben ----------
-  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50 };
+  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290 };
   const NONE = "__ha_none__";
   const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen" };
   const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
@@ -268,7 +273,7 @@
       case "template":
         return mk("🧩 Template ist wahr", [F("value_template", "", { type: "template" })]);
       case "trigger":
-        return mk("🏷️ Ausgelöst durch ID", [F("id", "", { type: "list" })]);
+        return mk("🏷️ Ausgelöst durch ID", [F("id", "", { type: "triggerid" })]);
       case "and":
         return mk("UND – alle erfüllt", [], [L("conditions", "", "condition")], C.flow);
       case "or":
@@ -375,33 +380,70 @@
     return { ...mk("Aktion (unbekannt)", []), colour: C.generic, generic: true };
   }
 
+  const MODE_FIELDS = (cfg) => [
+    F("mode", "Modus", {
+      type: "select", row: "mode",
+      options: [["(Standard: single)", ""], ["single – nicht erneut starten", "single"], ["restart – neu starten", "restart"],
+        ["queued – nacheinander", "queued"], ["parallel – gleichzeitig", "parallel"]],
+    }),
+    ...(cfg.mode === "queued" || cfg.mode === "parallel" || cfg.max !== undefined ? [F("max", "max.", { numeric: true, row: "mode" })] : []),
+  ];
+
+  // Automation oder Skript aus einem Blueprint: nur Name und Eingaben.
+  function blueprintSpec(cfg, kind) {
+    const bp = cfg.use_blueprint;
+    const meta = (typeof bp.path === "string" && hooks.blueprintInputs(bp.path, kind)) || {};
+    const fields = [F("alias", "Name"), P("description", "Beschreibung")];
+    const seen = new Set();
+    const walk = (o) => {
+      for (const [k, f] of Object.entries(o || {})) {
+        if (f && isObj(f.input)) { walk(f.input); continue; }
+        if (k.includes(".")) continue;
+        seen.add(k);
+        fields.push(selectorField(`use_blueprint.input.${k}`, (f && f.name) || k, f && f.selector, "always"));
+      }
+    };
+    walk(meta);
+    const inp = isObj(bp.input) ? bp.input : {};
+    for (const k of Object.keys(inp)) {
+      if (seen.has(k) || k.includes(".")) continue;
+      fields.push(F(`use_blueprint.input.${k}`, k, { type: isPrim(inp[k]) ? "text" : "json" }));
+    }
+    const name = String(bp.path || "").replace(/\.yaml$/, "").split("/").pop();
+    return { title: `🧩 Blueprint: ${name}`, colour: kind === "script" ? C.script : C.root, fields, lists: [], blueprint: true };
+  }
+
   function rootSpec(cfg) {
+    if (isObj(cfg.use_blueprint)) return blueprintSpec(cfg, "automation");
     const pick = (a, b) => (a in cfg ? a : b in cfg ? b : a);
     return {
       title: "🤖 Automation",
       colour: C.root,
-      fields: [
-        F("alias", "Name"),
-        F("description", "Beschreibung"),
-        F("mode", "Modus", {
-          type: "select", row: "mode",
-          options: [["(Standard: single)", ""], ["single – nicht erneut starten", "single"], ["restart – neu starten", "restart"],
-            ["queued – nacheinander", "queued"], ["parallel – gleichzeitig", "parallel"]],
-        }),
-        ...(cfg.mode === "queued" || cfg.mode === "parallel" || cfg.max !== undefined ? [F("max", "max.", { numeric: true, row: "mode" })] : []),
-      ],
+      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg)],
       lists: [L(pick("triggers", "trigger"), "WENN", "trigger"), L(pick("conditions", "condition"), "NUR WENN", "condition"), L(pick("actions", "action"), "DANN", "action")],
+    };
+  }
+
+  // Skript = wiederverwendbare Funktion mit Eingaben (fields) und Ablauf (sequence).
+  function scriptSpec(cfg) {
+    if (isObj(cfg.use_blueprint)) return blueprintSpec(cfg, "script");
+    return {
+      title: "📜 Skript (Funktion)",
+      colour: C.script,
+      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"), P("fields", "Eingaben (JSON)", { type: "json" })],
+      lists: [L("sequence", "ABLAUF", "action")],
     };
   }
 
   function specFor(kind, item) {
     let spec;
-    if (kind === "root") spec = rootSpec(item);
+    if (kind === "root") spec = rootSpec(isObj(item) ? item : {});
+    else if (kind === "script") spec = scriptSpec(isObj(item) ? item : {});
     else if (kind === "trigger") spec = isObj(item) ? triggerSpec(item) : { title: "Auslöser", colour: C.generic, fields: [], lists: [], generic: true };
     else if (kind === "condition") spec = conditionSpec(item);
     else if (kind === "option") spec = { title: "Option", colour: C.flow, fields: [], lists: [L("conditions", "wenn", "condition"), L("sequence", "dann", "action")] };
     else spec = actionSpec(item);
-    if (isObj(item) && kind !== "root") {
+    if (isObj(item) && kind !== "root" && kind !== "script") {
       const extra = [];
       if (item.alias !== undefined && isPrim(item.alias)) extra.push(F("alias", "Name"));
       spec.fields = [...extra, ...spec.fields];
@@ -410,6 +452,7 @@
     return spec;
   }
 
+  const ROOTS = new Set(["root", "script"]);
   const classify = (listKind, el) => (listKind === "action" && isObj(el) && "condition" in el ? "condition" : listKind);
   const CHECK_PREV = { trigger: "ha_trigger", condition: "ha_condition", action: "ha_action", option: "ha_option" };
   const CHECK_LIST = { trigger: ["ha_trigger"], condition: ["ha_condition"], action: ["ha_action", "ha_condition"], option: ["ha_option"] };
@@ -418,7 +461,7 @@
   function itemToBlockJson(kind, item) {
     const spec = specFor(kind, item);
     const json = { type: "ha_" + kind, extraState: { raw: clone(item) } };
-    if (isObj(item) && item.enabled === false && kind !== "root") json.enabled = false;
+    if (isObj(item) && item.enabled === false && !ROOTS.has(kind)) json.enabled = false;
     spec.lists.forEach((l, i) => {
       const v = getPath(item, l.path);
       if (v === undefined || v === null) return;
@@ -439,7 +482,7 @@
   }
 
   // ---------- Feldwerte <-> HA-Werte ----------
-  const LISTY = new Set(["entity", "state", "list"]);
+  const LISTY = new Set(["entity", "state", "list", "triggerid"]);
   function toFieldString(v, f) {
     if (v === undefined) return "";
     if (Array.isArray(v) && LISTY.has(f.type) && v.every(isPrim)) return v.join(", ");
@@ -489,7 +532,7 @@
         if (l.single && items.length === 1) setPath(out, l.path, items[0]);
         else setPath(out, l.path, items);
       });
-      if (b.type !== "ha_root") {
+      if (!ROOTS.has(b.haKind_)) {
         const disabled = !b.isEnabled();
         const wasDisabled = b.raw_ && b.raw_.enabled === false;
         if (disabled && !wasDisabled) out.enabled = false;
@@ -580,6 +623,8 @@
           return new FieldSuggest(str, () => hooks.services());
         case "time":
           return new FieldSuggest(str, TIME_HINTS);
+        case "triggerid":
+          return new FieldSuggest(str, () => hooks.triggerIds());
         default:
           return new Blockly.FieldTextInput(str);
       }
@@ -587,6 +632,11 @@
 
     const mixin = {
       saveExtraState() { return { raw: this.raw_ }; },
+      customContextMenu(options) {
+        if (this.isInFlyout || ROOTS.has(this.haKind_) || !hooks.renameBlock || !isObj(this.raw_)) return;
+        const block = this;
+        options.unshift({ text: "✏️ Name / Kommentar …", enabled: true, callback: () => hooks.renameBlock(block) });
+      },
       loadExtraState(state) { this.build_(state && state.raw !== undefined ? state.raw : {}); },
       build_(raw) {
         this.raw_ = raw;
@@ -594,7 +644,7 @@
         // Einfach-Modus: statt Eingabefeldern anklickbare Werte („Chips“), die ein
         // Auswahlfenster im HA-Stil öffnen. Gespeichert wird über replaceBlock (verlustfrei).
         const simpleBlock = hooks.simple && hooks.openEditor && nativeEditable(this.haKind_, raw);
-        if (hooks.simple && this.haKind_ === "root") spec.fields = spec.fields.filter((f) => f.path === "alias");
+        if (hooks.simple && ROOTS.has(this.haKind_) && !spec.blueprint) spec.fields = spec.fields.filter((f) => f.path === "alias");
         const chips = simpleBlock && hooks.pickField ? simpleChips(spec, raw) : [];
         if (simpleBlock) spec.fields = [];
         this.spec_ = spec;
@@ -606,6 +656,10 @@
           const block = this;
           head.appendField(new Blockly.FieldImage(GEAR, 16, 16, "Eigenschaften", () => hooks.openEditor(block)), "GEAR");
           if (!spec.generic) this.setTooltip("Zahnrad oder Auswahlfeld anklicken: Eigenschaften im HA-Dialog bearbeiten");
+        }
+        // Name eines Schritts (alias) sichtbar im Kopf – auch wenn der Block eingeklappt ist.
+        if (!ROOTS.has(this.haKind_) && isObj(raw) && isPrim(raw.alias) && raw.alias !== "" && (hooks.simple || simpleBlock)) {
+          head.appendField(new Blockly.FieldLabel("„" + short(raw.alias, 40) + "“", "ha-alias"), "ALIAS");
         }
         if (simpleBlock && chips.length) {
           const block = this;
@@ -690,6 +744,13 @@
             fld.setValidator((nv) => { lbl.setValue(hooks.serviceName(nv)); return nv; });
           }
         });
+        // Skript-Eingaben (fields) im einfachen Modus als anklickbarer Wert.
+        if (this.haKind_ === "script" && hooks.simple && !spec.blueprint && hooks.editScriptFields && !this.isInFlyout) {
+          const block = this;
+          const keys = isObj(raw.fields) ? Object.keys(raw.fields) : [];
+          this.appendDummyInput("SFIELDS").appendField("Eingaben").appendField(
+            new FieldButton(keys.length ? keys.join(", ") : "keine – hinzufügen …", () => hooks.editScriptFields(block), "ha-chip"), "SFB");
+        }
         this.listMap_ = [];
         spec.lists.forEach((l, i) => {
           const name = "L" + i;
@@ -718,6 +779,7 @@
       };
     };
     def("root", function () { this.setDeletable(false); });
+    def("script", function () { this.setDeletable(false); });
     def("trigger", function () {
       this.setPreviousStatement(true, CHECK_PREV.trigger);
       this.setNextStatement(true, CHECK_PREV.trigger);
@@ -754,7 +816,7 @@
   const tb = (kind, raw) => ({ kind: "block", type: "ha_" + kind, extraState: { raw: stripEmpty(raw) } });
   const label = (text) => ({ kind: "label", text });
 
-  function buildToolbox() {
+  function buildToolbox(kind = "root") {
     const services = hooks.services().map((s) => (Array.isArray(s) ? s[0] : s));
     const has = (s) => services.includes(s);
     const svc = (s, extra = {}) => tb("action", { action: s, target: { entity_id: "" }, ...extra });
@@ -790,10 +852,21 @@
     ].filter((x) => x.kind === "label" || !x.extraState.raw.action || x.extraState.raw.action === "" || !services.length || has(x.extraState.raw.action));
 
     const btn = (text, callbackKey) => ({ kind: "button", text, callbackKey });
+    // Skripte = eigene Funktionen: als Aufruf-Baustein; ihre Eingaben kommen aus dem Dienst-Schema.
+    const scriptCat = { kind: "category", name: "Skripte (Funktionen)", colour: String(C.script), contents: [
+      btn("＋ Neues Skript anlegen …", "newScript"),
+      label("Ein Skript bündelt Schritte, die mehrere Automationen nutzen:"),
+      ...hooks.scripts().filter(([id]) => typeof id === "string" && id.startsWith("script.")).map(([id]) => tb("action", { action: id })),
+    ] };
+    const forKind = (box) => {
+      if (kind === "script") box.contents = box.contents.filter((c) => c.colour !== String(C.trigger));
+      box.contents.push(scriptCat);
+      return box;
+    };
 
     // Einfach-Modus: wenige, verständliche Bausteine; alles andere über den HA-Dialog.
     if (hooks.simple) {
-      return {
+      return forKind({
         kind: "categoryToolbox",
         contents: [
           { kind: "category", name: "Wenn …", colour: String(C.trigger), contents: [
@@ -824,10 +897,10 @@
             tb("action", { repeat: { count: 2, sequence: [] } }),
           ] },
         ],
-      };
+      });
     }
 
-    return {
+    return forKind({
       kind: "categoryToolbox",
       contents: [
         { kind: "category", name: "Auslöser", colour: String(C.trigger), contents: [
@@ -880,7 +953,7 @@
           tb("action", {}),
         ] },
       ],
-    };
+    });
   }
 
   const NEW_AUTOMATION = () => ({
@@ -926,6 +999,167 @@
     }) },
   ];
 
+
+  // ---------- Pfade (wie in HA-Traces: "action/0/choose/1/sequence/0") ----------
+  const ROOT_SEG = { triggers: "trigger", trigger: "trigger", conditions: "condition", condition: "condition", actions: "action", action: "action", sequence: "sequence" };
+  const segOf = (kind, listPath) => (ROOTS.has(kind) ? ROOT_SEG[listPath] || listPath : listPath.replace(/\./g, "/"));
+  const join = (base, seg, i) => (base ? `${base}/${seg}/${i}` : `${seg}/${i}`);
+
+  // Ruft fn(item, kind, path) für jedes Element einer Konfiguration auf (gleiche Struktur wie die Blöcke).
+  function walkConfig(cfg, kind, fn) {
+    const rec = (item, k, path, parents) => {
+      fn(item, k, path, parents);
+      if (!isObj(item)) return;
+      const spec = specFor(k, item);
+      for (const l of spec.lists) {
+        const v = getPath(item, l.path);
+        if (v === undefined || v === null) continue;
+        const seg = segOf(k, l.path);
+        (Array.isArray(v) ? v : [v]).forEach((el, i) => rec(el, classify(l.kind, el), join(path, seg, i), [...parents, item]));
+      }
+    };
+    rec(cfg, kind, "", []);
+  }
+
+  // Ordnet jedem Block seinen Pfad zu. Ergebnis: Map(pfad -> block); "" ist die Wurzel.
+  function collectPaths(rootBlock) {
+    const map = new Map();
+    const walk = (b, base) => {
+      b.habPath_ = base;
+      map.set(base, b);
+      for (const l of b.listMap_ || []) {
+        const seg = segOf(b.haKind_, l.path);
+        let i = 0;
+        for (let c = b.getInputTargetBlock(l.name); c; c = c.getNextBlock(), i++) walk(c, join(base, seg, i));
+      }
+    };
+    if (rootBlock) walk(rootBlock, "");
+    return map;
+  }
+
+  const triggersOf = (cfg) => (isObj(cfg) ? [].concat(cfg.triggers !== undefined ? cfg.triggers : cfg.trigger !== undefined ? cfg.trigger : []) : []);
+  function triggerIds(cfg) {
+    const out = [];
+    for (const t of triggersOf(cfg)) if (isObj(t) && isPrim(t.id) && t.id !== "" && !out.includes(String(t.id))) out.push(String(t.id));
+    return out;
+  }
+
+  // Zeitraum in Sekunden (null = unbekannt, z. B. Template).
+  function durationSeconds(d) {
+    if (typeof d === "number") return d;
+    if (isObj(d)) {
+      const f = { days: 86400, hours: 3600, minutes: 60, seconds: 1, milliseconds: 0.001 };
+      let sum = 0;
+      for (const [k, v] of Object.entries(d)) {
+        const n = Number(v);
+        if (!(k in f) || !isFinite(n)) return null;
+        sum += n * f[k];
+      }
+      return sum;
+    }
+    if (typeof d === "string") {
+      const m = /^(-)?(?:(\d+):)?(\d+):(\d+)(?:\.\d+)?$/.exec(d.trim());
+      if (m) return (m[2] ? +m[2] * 3600 + +m[3] * 60 + +m[4] : +m[3] * 60 + +m[4]);
+      if (/^\d+(\.\d+)?$/.test(d.trim())) return Number(d);
+    }
+    return null;
+  }
+  const fmtDur = (sec) => (sec >= 3600 ? `${Math.round((sec / 3600) * 10) / 10} Std` : sec >= 60 ? `${Math.round(sec / 60)} Min` : `${sec} Sek`);
+
+  /* Prüfregeln: typische Stolperfallen als Hinweis am Block.
+   * Ergebnis: [{ path, level: "warn" | "info", msg }] */
+  const LONG_WAIT = 3600;
+  function lint(cfg, kind = "root") {
+    const out = [];
+    if (!isObj(cfg) || isObj(cfg.use_blueprint)) return out;
+    const add = (path, level, msg) => out.push({ path, level, msg });
+    const ids = triggerIds(cfg);
+    const mode = cfg.mode || "single";
+    if (kind === "root" && !triggersOf(cfg).length) add("", "warn", "Diese Automation hat keinen Auslöser – sie startet nie von selbst.");
+    let singleWarned = false;
+    walkConfig(cfg, kind, (item, k, path) => {
+      if (!isObj(item) || !path) return;
+      if (k === "condition" && item.condition === "trigger" && kind === "root") {
+        const missing = [].concat(item.id === undefined ? [] : item.id).filter((x) => isPrim(x) && x !== "" && !ids.includes(String(x)));
+        if (missing.length) add(path, "warn", `Trigger-ID „${missing.join("“, „")}“ gibt es bei den Auslösern dieser Automation nicht.`);
+      }
+      const waits = [];
+      if (k === "action") {
+        if ("delay" in item) waits.push(["delay", "Warten"]);
+        if ("wait_template" in item || "wait_for_trigger" in item) waits.push(["timeout", "Warten (höchstens)"]);
+      }
+      if (k === "trigger" && item.for !== undefined) waits.push(["for", "„für“-Dauer"]);
+      if (k === "condition" && item.for !== undefined) waits.push(["for", "„seit“-Dauer"]);
+      for (const [key, label] of waits) {
+        const sec = durationSeconds(item[key]);
+        if (sec !== null && sec >= LONG_WAIT)
+          add(path, "info", `${label} von ${fmtDur(sec)}: übersteht keinen Neustart von Home Assistant. Besser einen Timer-Helfer (timer.*) verwenden.`);
+      }
+      if (kind === "root" && mode === "single" && !singleWarned && k === "action" &&
+          ("delay" in item || "wait_template" in item || "wait_for_trigger" in item)) {
+        const sec = "delay" in item ? durationSeconds(item.delay) : null;
+        if (sec === null || sec >= 5) {
+          singleWarned = true;
+          add(path, "info", "Modus „single“: Solange hier gewartet wird, werden neue Auslösungen ignoriert. Für Bewegungslicht o. Ä. passt meist „restart“.");
+        }
+      }
+      if (k === "action" && "if" in item && [].concat(item.then || []).length === 0 && [].concat(item.else || []).length === 0)
+        add(path, "info", "„Wenn“ ohne Aktionen in „dann“ und „sonst“ hat keine Wirkung.");
+    });
+    return out;
+  }
+
+  /* Querverweise: welche Entitäten eine Konfiguration auslöst, prüft oder schaltet.
+   * Ergebnis: [{ entity, role: "trigger" | "condition" | "action" | "call" | "blueprint", path }] */
+  const ENTITY_RE = /^[a-z_]+\.[a-z0-9_]+$/;
+  const TPL_RE = /(?:states|is_state|state_attr|is_state_attr|has_value|expand)\(\s*['"]([a-z_]+\.[a-z0-9_]+)['"]|states\.([a-z_]+\.[a-z0-9_]+)/g;
+  function references(cfg, kind = "root") {
+    const out = [];
+    const seen = new Set();
+    const add = (entity, role, path) => {
+      if (typeof entity !== "string" || !ENTITY_RE.test(entity)) return;
+      const key = `${entity}|${role}|${path}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ entity, role, path });
+    };
+    const fromTemplates = (v, role, path) => {
+      if (typeof v === "string") { if (v.includes("{")) for (const m of v.matchAll(TPL_RE)) add(m[1] || m[2], role, path); }
+      else if (Array.isArray(v)) v.forEach((x) => fromTemplates(x, role, path));
+      else if (isObj(v)) Object.values(v).forEach((x) => fromTemplates(x, role, path));
+    };
+    if (!isObj(cfg)) return out;
+    if (isObj(cfg.use_blueprint)) {
+      const scan = (v) => {
+        if (typeof v === "string") add(v, "blueprint", "");
+        else if (Array.isArray(v)) v.forEach(scan);
+        else if (isObj(v)) Object.values(v).forEach(scan);
+      };
+      scan(cfg.use_blueprint.input);
+      return out;
+    }
+    walkConfig(cfg, kind, (item, k, path) => {
+      if (!isObj(item)) { if (typeof item === "string") fromTemplates(item, k, path); return; }
+      if (!path && ROOTS.has(k)) return;
+      if (k === "option") return;
+      const role = k === "trigger" ? "trigger" : k === "condition" ? "condition" : "action";
+      const ents = [];
+      if (item.entity_id !== undefined) ents.push(...[].concat(item.entity_id));
+      if (isObj(item.target) && item.target.entity_id !== undefined) ents.push(...[].concat(item.target.entity_id));
+      if (typeof item.zone === "string") ents.push(item.zone);
+      if (typeof item.scene === "string") ents.push(item.scene);
+      for (const key of ["above", "below", "after", "before"]) if (typeof item[key] === "string" && ENTITY_RE.test(item[key]) && !/^(sun|sunrise|sunset)$/.test(item[key])) ents.push(item[key]);
+      ents.forEach((e) => add(e, role, path));
+      const svc = item.action !== undefined ? item.action : item.service;
+      if (k === "action" && typeof svc === "string" && /^script\.[a-z0-9_]+$/.test(svc) && !/^script\.(turn_on|turn_off|toggle|reload)$/.test(svc)) add(svc, "call", path);
+      // Templates nur im eigenen Element durchsuchen, nicht in verschachtelten Listen.
+      const own = {};
+      for (const [key, v] of Object.entries(item)) if (!specFor(k, item).lists.some((l) => l.path.split(".")[0] === key)) own[key] = v;
+      fromTemplates(own, role, path);
+    });
+    return out;
+  }
+
   // Findet Stellen, an denen noch eine Auswahl fehlt (für Warnhinweise am Block).
   function missingInfo(item) {
     if (!isObj(item)) return null;
@@ -938,7 +1172,9 @@
     return null;
   }
 
-  const api = { TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
+
+  const api = { NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);
