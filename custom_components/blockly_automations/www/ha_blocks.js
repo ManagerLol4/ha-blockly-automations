@@ -145,7 +145,7 @@
   // ---------- Farben ----------
   const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290, scene: 330, gvar: 330 };
   const NONE = "__ha_none__";
-  const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen", sceneent: "＋ Entität hinzufügen" };
+  const ADD_LABEL = { when: "＋ Falls-Klammer hinzufügen", trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen", sceneent: "＋ Entität hinzufügen" };
   const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#fff" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64z"/></svg>');
   const PLUS_ICON = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
@@ -349,7 +349,9 @@
         if (f && f.fields) { walk(f.fields, "present"); continue; }
         if (k === "entity_id") continue;
         seen.add(k);
-        fields.push(selectorField(`data.${k}`, (f && f.name) || k, f && f.selector, show));
+        const sf = selectorField(`data.${k}`, (f && f.name) || k, f && f.selector, show);
+        if (f && f.required) sf.req = true; // Pflichtangabe laut HA: nie hinter „＋“ verstecken
+        fields.push(sf);
       }
     };
     walk(schema, "always");
@@ -726,6 +728,134 @@
     };
   }
 
+  /* ---------- Version B: Falls-Klammern wie bei ioBroker ----------
+   * „⚡ Falls [Auslöser] → mache {Schritte}“. In HA ist das eine normale Automation:
+   *   triggers: [ …mit id… ],  actions: [ { choose: [ { conditions: [{condition: trigger, id}], sequence: […] }, … ] } ]
+   * Angezeigt wird die Klammer-Ansicht nur, wenn die Automation genau diese Form hat (verlustfrei). */
+  const NEW_WHEN = () => ({ __t: [], __s: [] });
+  const idsOf = (c) => [].concat(c && c.id !== undefined ? c.id : []).map(String);
+  function whenGroups(cfg) {
+    if (!hooks.extended || !isObj(cfg) || isObj(cfg.use_blueprint) || !Array.isArray(cfg.triggers) || !Array.isArray(cfg.actions)) return null;
+    if ("trigger" in cfg || "action" in cfg) return null;
+    const trigs = cfg.triggers, acts = cfg.actions;
+    if (!trigs.length && !acts.length) return [];
+    if (acts.length !== 1 || !isObj(acts[0]) || Object.keys(acts[0]).join() !== "choose" || !Array.isArray(acts[0].choose) || !acts[0].choose.length) return null;
+    if (!trigs.every((t) => isObj(t) && isPrim(t.id) && t.id !== "")) return null;
+    const groups = [];
+    let ti = 0;
+    for (const o of acts[0].choose) {
+      if (!isObj(o) || !Array.isArray(o.sequence) || !Array.isArray(o.conditions) || o.conditions.length !== 1) return null;
+      const c = o.conditions[0];
+      if (!isObj(c) || c.condition !== "trigger" || Object.keys(c).some((k) => !["condition", "id"].includes(k))) return null;
+      const ids = idsOf(c);
+      if (!ids.length || [].concat(c.id).some((x) => !isPrim(x))) return null;
+      const mine = [];
+      while (ti < trigs.length && ids.includes(String(trigs[ti].id))) mine.push(ti++);
+      if (!mine.length) return null;
+      // Jede ID der Option muss zu einem ihrer Auslöser gehören.
+      if (!ids.every((id) => mine.some((i) => String(trigs[i].id) === id))) return null;
+      groups.push({ trig: mine, opt: o });
+    }
+    if (ti !== trigs.length) return null;
+    // Eine ID darf nicht in zwei Klammern vorkommen.
+    const all = groups.flatMap((g) => idsOf(g.opt.conditions[0]));
+    if (new Set(all).size !== all.length) return null;
+    return groups;
+  }
+  function whenItems(cfg, groups) {
+    return groups.map((g) => {
+      const { conditions, sequence, ...rest } = g.opt;
+      const it = { __t: g.trig.map((i) => cfg.triggers[i]), __s: sequence };
+      if (Object.keys(rest).length) it.__o = rest;
+      it.__c = conditions;
+      it.__k = Object.keys(g.opt);
+      return it;
+    });
+  }
+  // Klammern -> HA-Automation (unverändert -> exakt das Original).
+  function whenApply(out, vl) {
+    const whens = (vl.when || []).filter((w) => isObj(w));
+    const used = new Set();
+    for (const w of whens) for (const t of [].concat(w.__t || [])) if (isObj(t) && isPrim(t.id) && t.id !== "") used.add(String(t.id));
+    let n = 1;
+    const fresh = () => { while (used.has(`falls_${n}`)) n++; used.add(`falls_${n}`); return `falls_${n}`; };
+    const triggers = [], options = [];
+    for (const w of whens) {
+      const trigs = [].concat(w.__t || []).filter((t) => isObj(t));
+      const seq = [].concat(w.__s || []);
+      if (!trigs.length && !seq.length) continue;
+      let main = (trigs.find((t) => isPrim(t.id) && t.id !== "") || {}).id;
+      if (main === undefined) main = fresh();
+      const ts = trigs.map((t) => (isPrim(t.id) && t.id !== "" ? t : { ...t, id: main }));
+      triggers.push(...ts);
+      const ids = [];
+      for (const t of ts) if (!ids.includes(String(t.id))) ids.push(String(t.id));
+      if (!ids.length) ids.push(String(main));
+      const origIds = Array.isArray(w.__c) && w.__c.length === 1 ? idsOf(w.__c[0]) : null;
+      const conditions = origIds && origIds.join("\u0000") === ids.join("\u0000") ? w.__c
+        : [{ condition: "trigger", id: ids.length === 1 ? ids[0] : ids }];
+      const parts = { ...(isObj(w.__o) ? w.__o : {}), conditions, sequence: seq };
+      const o = {};
+      for (const k of Array.isArray(w.__k) ? w.__k : []) if (k in parts) o[k] = parts[k];
+      for (const k of Object.keys(parts)) if (!(k in o)) o[k] = parts[k];
+      options.push(o);
+    }
+    out.triggers = triggers;
+    out.actions = options.length ? [{ choose: options }] : [];
+    return out;
+  }
+  // Automation in Klammern umwandeln: alle Auslöser in eine Klammer, alle Schritte in „mache“.
+  function toWhenView(cfg) {
+    if (!isObj(cfg) || whenGroups(cfg)) return cfg;
+    const c = clone(cfg);
+    // Schon nach Trigger-ID verzweigt? Dann Auslöser passend sortieren -> je Zweig eine Klammer.
+    const split = splitByTriggerId(c);
+    if (split) return split;
+    const trigs = [].concat(c.triggers !== undefined ? c.triggers : c.trigger !== undefined ? c.trigger : []);
+    const acts = [].concat(c.actions !== undefined ? c.actions : c.action !== undefined ? c.action : []);
+    const out = whenApply({}, { when: [{ __t: trigs, __s: acts }] });
+    const res = {};
+    for (const [k, v] of Object.entries(c)) {
+      if (k === "trigger" || k === "triggers") res.triggers = out.triggers;
+      else if (k === "action" || k === "actions") res.actions = out.actions;
+      else res[k] = v;
+    }
+    if (!("triggers" in res)) res.triggers = out.triggers;
+    if (!("actions" in res)) res.actions = out.actions;
+    return res;
+  }
+  function splitByTriggerId(c) {
+    if (!Array.isArray(c.triggers) || !Array.isArray(c.actions) || "trigger" in c || "action" in c) return null;
+    const a = c.actions;
+    if (a.length !== 1 || !isObj(a[0]) || Object.keys(a[0]).join() !== "choose" || !Array.isArray(a[0].choose)) return null;
+    const opts = a[0].choose;
+    const byOpt = opts.map(() => []);
+    for (const t of c.triggers) {
+      if (!isObj(t) || !isPrim(t.id) || t.id === "") return null;
+      const hits = opts.map((o, i) => (isObj(o) && Array.isArray(o.conditions) && o.conditions.length === 1 && isObj(o.conditions[0])
+        && o.conditions[0].condition === "trigger" && idsOf(o.conditions[0]).includes(String(t.id)) ? i : -1)).filter((i) => i >= 0);
+      if (hits.length !== 1) return null;
+      byOpt[hits[0]].push(t);
+    }
+    if (byOpt.some((x) => !x.length)) return null;
+    const n = { ...c, triggers: byOpt.flat() };
+    return whenGroups(n) ? n : null;
+  }
+  function whenRootSpec(cfg, groups) {
+    const base = rootSpec(cfg);
+    return {
+      ...base,
+      lists: [L("__x.when", "FALLS", "when", { virt: whenItems(cfg, groups) }), L("conditions", "NUR WENN (für alle)", "condition")],
+      applyLists: whenApply,
+    };
+  }
+  const whenSpec = () => ({ title: "⚡ Wenn eines davon passiert:", colour: C.trigger, fields: [], lists: [L("__t", "", "trigger"), L("__s", "mache", "action")] });
+  // Spezifikation für die Darstellung (Blöcke). walkConfig & Co. nutzen weiter specFor (echte Struktur).
+  function viewSpec(kind, item) {
+    if (kind === "root") { const g = whenGroups(item); if (g) return whenRootSpec(item, g); }
+    return specFor(kind, item);
+  }
+
   // Skript = wiederverwendbare Funktion mit Eingaben (fields) und Ablauf (sequence).
   function scriptSpec(cfg) {
     if (isObj(cfg.use_blueprint)) return blueprintSpec(cfg, "script");
@@ -765,6 +895,7 @@
     else if (kind === "script") spec = scriptSpec(isObj(item) ? item : {});
     else if (kind === "trigger") spec = isObj(item) ? triggerSpec(item) : { title: "Auslöser", colour: C.generic, fields: [], lists: [], generic: true };
     else if (kind === "condition") spec = conditionSpec(item);
+    else if (kind === "when") return whenSpec(item);
     else if (kind === "option") spec = { title: "Option", colour: C.flow, fields: [], lists: [L("conditions", "wenn", "condition"), L("sequence", "dann", "action")] };
     else spec = actionSpec(item);
     if (isObj(item) && kind !== "root" && kind !== "script") {
@@ -780,8 +911,8 @@
   // Schlüssel einer Geräte-Automation (welche Art bei welchem Gerät).
   const devKey = (x) => (isObj(x) && (x.domain || x.type) ? JSON.stringify([x.domain || "", x.type || "", x.subtype === undefined ? "" : x.subtype, x.entity_id || ""]) : "");
   const classify = (listKind, el) => (listKind === "action" && isObj(el) && "condition" in el ? "condition" : listKind);
-  const CHECK_PREV = { trigger: "ha_trigger", condition: "ha_condition", action: "ha_action", option: "ha_option", sceneent: "ha_sceneent" };
-  const CHECK_LIST = { trigger: ["ha_trigger"], condition: ["ha_condition"], action: ["ha_action", "ha_condition"], option: ["ha_option"], sceneent: ["ha_sceneent"] };
+  const CHECK_PREV = { when: "ha_when", trigger: "ha_trigger", condition: "ha_condition", action: "ha_action", option: "ha_option", sceneent: "ha_sceneent" };
+  const CHECK_LIST = { when: ["ha_when"], trigger: ["ha_trigger"], condition: ["ha_condition"], action: ["ha_action", "ha_condition"], option: ["ha_option"], sceneent: ["ha_sceneent"] };
 
   // Fester Wert (an/aus, Zahl, Text) als Wert-Baustein – und zurück.
   function constTree(s) {
@@ -800,7 +931,7 @@
 
   // ---------- HA-Objekt -> Blockly-JSON ----------
   function itemToBlockJson(kind, item) {
-    const spec = specFor(kind, item);
+    const spec = viewSpec(kind, item);
     const json = { type: "ha_" + kind, extraState: { raw: clone(item) } };
     if (isObj(item) && item.enabled === false && !ROOTS.has(kind)) json.enabled = false;
     // Templates aus Wert-Bausteinen wieder als Bausteine einstecken.
@@ -814,7 +945,7 @@
       });
     }
     spec.lists.forEach((l, i) => {
-      const v = getPath(item, l.path);
+      const v = "virt" in l ? l.virt : getPath(item, l.path);
       if (v === undefined || v === null) return;
       const arr = listArr(l, v);
       const chain = chainJson(l.kind, arr);
@@ -922,10 +1053,12 @@
     // Version B: über „＋“ geholte, leer gebliebene Angaben nicht speichern.
     if (hooks.extended && isObj(out)) for (const f of b.fieldMap_ || []) if (f.opt && getPath(out, f.path) === "") delPath(out, f.path);
     if (b.spec_ && b.spec_.applyVirt && isObj(out)) out = b.spec_.applyVirt(out, virt, vchanged, b.raw_);
+    const vlists = {};
     if (isObj(out)) {
       (b.listMap_ || []).forEach((l) => {
         const items = [];
         for (let c = b.getInputTargetBlock(l.name); c; c = c.getNextBlock()) items.push(blockToItem(c));
+        if (l.path.startsWith("__x.")) { vlists[l.path.slice(4)] = items; return; }
         if ((l.orig === undefined || l.orig === null) && items.length === 0) return;
         if (l.dict) {
           const o = {};
@@ -936,7 +1069,8 @@
         if (l.single && items.length === 1) setPath(out, l.path, items[0]);
         else setPath(out, l.path, items);
       });
-      if (!ROOTS.has(b.haKind_)) {
+      if (b.spec_ && b.spec_.applyLists) out = b.spec_.applyLists(out, vlists, b.raw_);
+      if (!ROOTS.has(b.haKind_) && b.haKind_ !== "when") {
         const disabled = !b.isEnabled();
         const wasDisabled = b.raw_ && b.raw_.enabled === false;
         if (disabled && !wasDisabled) out.enabled = false;
@@ -1182,6 +1316,12 @@
         }
       },
       customContextMenu(options) {
+        // Version B: Automation in Falls-Klammern umwandeln (wie ioBroker).
+        if (hooks.extended && hooks.convertToWhen && this.haKind_ === "root" && !this.isInFlyout && isObj(this.raw_) && !isObj(this.raw_.use_blueprint)
+            && !whenGroups(blockToItem(this))) {
+          const block = this;
+          options.push({ text: "⚡ In Falls-Klammern umwandeln (wie ioBroker)", enabled: true, callback: () => hooks.convertToWhen(block) });
+        }
         if (this.isInFlyout || ROOTS.has(this.haKind_) || !hooks.renameBlock || !isObj(this.raw_)) return;
         const block = this;
         if (this.haKind_ === "sceneent") return;
@@ -1197,7 +1337,7 @@
       loadExtraState(state) { this.build_(state && state.raw !== undefined ? state.raw : {}); },
       build_(raw) {
         this.raw_ = raw;
-        const spec = specFor(this.haKind_, raw);
+        const spec = viewSpec(this.haKind_, raw);
         // Einfach-Modus: statt Eingabefeldern anklickbare Werte („Chips“), die ein
         // Auswahlfenster im HA-Stil öffnen. Gespeichert wird über replaceBlock (verlustfrei).
         const simpleBlock = hooks.simple && hooks.openEditor && nativeEditable(this.haKind_, raw);
@@ -1359,7 +1499,7 @@
         this.listMap_ = [];
         spec.lists.forEach((l, i) => {
           const name = "L" + i;
-          const orig = getPath(raw, l.path);
+          const orig = "virt" in l ? l.virt : getPath(raw, l.path);
           this.appendStatementInput(name).setCheck(CHECK_LIST[l.kind]).appendField(l.label);
           this.listMap_.push({ name, path: l.path, orig, dict: !!l.dict, single: !l.dict && orig !== undefined && orig !== null && !Array.isArray(orig) });
           if (hooks.addItem && !this.isInFlyout) {
@@ -1401,6 +1541,10 @@
     def("action", function () {
       this.setPreviousStatement(true, CHECK_PREV.action);
       this.setNextStatement(true, ["ha_action", "ha_condition"]);
+    });
+    def("when", function () {
+      this.setPreviousStatement(true, CHECK_PREV.when);
+      this.setNextStatement(true, CHECK_PREV.when);
     });
     def("option", function () {
       this.setPreviousStatement(true, CHECK_PREV.option);
@@ -1556,6 +1700,10 @@
 
     // Version B: wie ioBroker „System“ – die universellen Bausteine zuerst.
     const systemCat = hooks.extended ? [cat("System", 20, [
+      ...(kind === "root" ? [
+        label("Falls-Klammer: Auslöser oben, Schritte bei „mache“ (in die FALLS-Lücke der Automation ziehen):"),
+        tb("when", { __t: [{ trigger: "state", entity_id: "", to: null }], __s: [] }),
+      ] : []),
       label("Steuern – für alle Geräte (Wert: an/aus, Zahl, Text oder einen Wert-Baustein einstecken):"),
       tb("action", { action: "light.turn_on", target: { entity_id: "" } }),
       tb("action", { action: "homeassistant.toggle", target: { entity_id: "" } }),
@@ -1793,6 +1941,19 @@
       b.habPath_ = base;
       map.set(base, b);
       for (const l of b.listMap_ || []) {
+        if (l.path === "__x.when") {
+          // Klammer k = action/0/choose/k; ihre Auslöser zählen über alle Klammern durch.
+          let ti = 0, k = 0;
+          for (let w = b.getInputTargetBlock(l.name); w; w = w.getNextBlock(), k++) {
+            const wb = `action/0/choose/${k}`;
+            w.habPath_ = wb;
+            map.set(wb, w);
+            const lt = (w.listMap_ || []).find((x) => x.path === "__t"), ls = (w.listMap_ || []).find((x) => x.path === "__s");
+            if (lt) for (let c = w.getInputTargetBlock(lt.name); c; c = c.getNextBlock()) walk(c, `trigger/${ti++}`);
+            if (ls) { let j = 0; for (let c = w.getInputTargetBlock(ls.name); c; c = c.getNextBlock(), j++) walk(c, `${wb}/sequence/${j}`); }
+          }
+          continue;
+        }
         const seg = segOf(b.haKind_, l.path);
         let i = 0;
         for (let c = b.getInputTargetBlock(l.name); c; c = c.getNextBlock(), i++) walk(c, join(base, seg, i));
@@ -2342,7 +2503,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { ctrlOf, fallsOf, CTRL, TIMER_FINISHED, RETURN, NEW_FUNCTION, isReturn, serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { whenGroups, toWhenView, NEW_WHEN, viewSpec, ctrlOf, fallsOf, CTRL, TIMER_FINISHED, RETURN, NEW_FUNCTION, isReturn, serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

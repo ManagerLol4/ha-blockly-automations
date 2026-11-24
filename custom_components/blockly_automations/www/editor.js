@@ -711,6 +711,20 @@
     };
   }
 
+  // Version B: Falls-Klammern
+  {
+    const base = HAB.hooks.addItem;
+    HAB.hooks.addItem = (block, inputName, kind) => (kind === "when" ? appendToInput(block, inputName, "when", HAB.NEW_WHEN()) : base(block, inputName, kind));
+  }
+  HAB.hooks.convertToWhen = () => {
+    const cfg = currentConfig();
+    if (!cfg) return;
+    const n = HAB.toWhenView(cfg);
+    reloadKeepingLayout(n);
+    showRoot && showRoot();
+    status("⚡ In eine Falls-Klammer umgewandelt – Auslöser lassen sich in eigene Klammern aufteilen. Hinweis: „Ausführen“ von Hand startet keine Klammer (es fehlt der Auslöser). Speichern nicht vergessen.", "ok");
+  };
+
   HAB.defineBlocks(Blockly);
 
   function status(text, cls = "") {

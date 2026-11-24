@@ -615,6 +615,11 @@ ok("version-b-system", () => {
       assert.ok(paths.includes("data.transition") && !paths.includes("data.brightness_pct"));
       assert.ok(sb.getField("PLUS") === null || sb.getField("PLUS") !== undefined);
       assert.deepStrictEqual(HAB.blockToItem(sb), svcA);
+      // Pflichtfelder laut Schema bleiben sichtbar
+      HAB.hooks.serviceFields = (svc) => (svc === "logbook.log" ? { name: { name: "Name", required: true, selector: { text: {} } }, message: { name: "Nachricht", required: true, selector: { text: {} } }, entity_id: {} } : null);
+      const lb = toBlocks({ action: "logbook.log" }, "action");
+      assert.ok(["data.name", "data.message"].every((p) => lb.fieldMap_.some((x) => x.path === p)));
+      HAB.hooks.serviceFields = (svc) => (svc === "light.turn_on" ? { transition: { name: "Übergang", selector: { number: {} } }, brightness_pct: { name: "Helligkeit", selector: { number: {} } } } : null);
       // „＋“ hinzugefügt, aber leer gelassen -> nicht gespeichert
       const withEmpty = { ...svcA, data: { transition: 2, brightness_pct: "" } };
       assert.deepStrictEqual(HAB.blockToItem(toBlocks(withEmpty, "action")), svcA);
@@ -632,6 +637,70 @@ ok("version-b-system", () => {
   // Version A: unverändert normale Bausteine
   assert.ok(!toBlocks({ action: "light.turn_on", target: { entity_id: "light.flur" } }, "action").getFieldValue("TITLE").includes("steuere"));
   assert.ok(!toBlocks({ trigger: "state", entity_id: "a.b", to: null }, "trigger").getFieldValue("TITLE").includes("Falls"));
+});
+
+// 20h) Version B Stufe 2: Falls-Klammern („Falls … → mache {…}“).
+ok("version-b-falls-klammern", () => {
+  HAB.hooks.extended = true;
+  try {
+    const cfg = { alias: "Flur", description: "", mode: "restart",
+      triggers: [
+        { trigger: "state", entity_id: "binary_sensor.b", to: "on", id: "bewegung" },
+        { trigger: "state", entity_id: "binary_sensor.c", to: "on", id: "bewegung" },
+        { trigger: "state", entity_id: "binary_sensor.b", to: "off", for: { minutes: 2 }, id: "ruhe" },
+      ],
+      conditions: [{ condition: "state", entity_id: "input_boolean.nacht", state: "off" }],
+      actions: [{ choose: [
+        { conditions: [{ condition: "trigger", id: "bewegung" }], sequence: [{ action: "light.turn_on", target: { entity_id: "light.flur" } }] },
+        { alias: "aus", conditions: [{ condition: "trigger", id: ["ruhe"] }], sequence: [{ action: "light.turn_off", target: { entity_id: "light.flur" } }] },
+      ] }] };
+    assert.ok(HAB.whenGroups(cfg));
+    const r = toBlocks(cfg);
+    assert.deepStrictEqual(HAB.blockToItem(r), cfg);
+    const w1 = child(r, "L0");
+    assert.strictEqual(w1.type, "ha_when");
+    // Pfade wie in HA-Traces
+    const paths = [...HAB.collectPaths(r).keys()];
+    for (const p of ["action/0/choose/0", "trigger/0", "trigger/1", "action/0/choose/0/sequence/0", "action/0/choose/1", "trigger/2", "action/0/choose/1/sequence/0", "condition/0"]) assert.ok(paths.includes(p), p);
+    // Zweite Klammer entfernen -> ihr Auslöser und Zweig verschwinden
+    w1.getNextBlock().dispose(true);
+    const out = HAB.blockToItem(r);
+    assert.strictEqual(out.triggers.length, 2);
+    assert.strictEqual(out.actions[0].choose.length, 1);
+    // Klammer mit Auslöser ohne ID: bekommt eine ID, Zweig passt dazu
+    const ws = r.workspace;
+    const json = HAB.itemToBlockJson("when", { __t: [{ trigger: "time", at: "07:00:00" }], __s: [{ delay: 1 }] });
+    const nb = Blockly.serialization.blocks.append(json, ws);
+    w1.nextConnection.connect(nb.previousConnection);
+    const out2 = HAB.blockToItem(r);
+    assert.deepStrictEqual(out2.triggers[2], { trigger: "time", at: "07:00:00", id: "falls_1" });
+    assert.deepStrictEqual(out2.actions[0].choose[1], { conditions: [{ condition: "trigger", id: "falls_1" }], sequence: [{ delay: 1 }] });
+    // Nicht passende Form -> klassische Ansicht
+    assert.strictEqual(HAB.whenGroups({ triggers: [{ trigger: "time", at: "07:00:00" }], actions: [{ delay: 1 }] }), null);
+    assert.strictEqual(HAB.whenGroups({ triggers: [{ trigger: "time", at: "1", id: "a" }, { trigger: "time", at: "2", id: "b" }],
+      actions: [{ choose: [{ conditions: [{ condition: "trigger", id: "b" }], sequence: [] }, { conditions: [{ condition: "trigger", id: "a" }], sequence: [] }] }] }), null);
+    // Neue, leere Automation -> Klammer-Ansicht
+    assert.deepStrictEqual(HAB.whenGroups(HAB.NEW_AUTOMATION()), []);
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(HAB.NEW_AUTOMATION())), HAB.NEW_AUTOMATION());
+    // Umwandeln: alle Auslöser in eine Klammer
+    const classic = { alias: "x", triggers: [{ trigger: "sun", event: "sunset" }, { trigger: "time", at: "20:00:00", id: "abend" }], conditions: [], actions: [{ action: "light.turn_on", target: { entity_id: "light.a" } }], mode: "single" };
+    const conv = HAB.toWhenView(classic);
+    assert.deepStrictEqual(Object.keys(conv), Object.keys(classic));
+    assert.deepStrictEqual(conv.triggers.map((t) => t.id), ["abend", "abend"]);
+    assert.deepStrictEqual(conv.actions, [{ choose: [{ conditions: [{ condition: "trigger", id: "abend" }], sequence: classic.actions }] }]);
+    assert.ok(HAB.whenGroups(conv));
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(conv)), conv);
+    // Umwandeln mit vorhandener Verzweigung nach Trigger-ID: Auslöser werden sortiert, je Zweig eine Klammer
+    const mixed = { ...cfg, triggers: [cfg.triggers[0], cfg.triggers[2], cfg.triggers[1]] };
+    assert.strictEqual(HAB.whenGroups(mixed), null);
+    const sp = HAB.toWhenView(mixed);
+    assert.deepStrictEqual(sp, cfg);
+    // Lint/Pfade über die echte Struktur funktionieren weiter
+    assert.ok(Array.isArray(HAB.lint(cfg, "root")));
+  } finally { HAB.hooks.extended = false; }
+  // Version A: klassische Ansicht, verlustfrei
+  const a = { triggers: [{ trigger: "time", at: "1", id: "a" }], actions: [{ choose: [{ conditions: [{ condition: "trigger", id: "a" }], sequence: [] }] }] };
+  assert.strictEqual(toBlocks(a).getInputTargetBlock("L0").type, "ha_trigger");
 });
 
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.

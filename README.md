@@ -53,6 +53,12 @@ Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
     Rollladen auf/zu/Position, Heizung Temperatur/Modus …), *🔀 umschalten*, *⚡ Falls [Entität]
     [ändert sich ▾ / wird aktualisiert / wird zu / steigt über / fällt unter]*, *[Wert ▾] von [Entität]*,
     *Uhrzeit ist zwischen … und …*. Bestehende Automationen werden automatisch so angezeigt, wo die Form passt.
+  - **Falls-Klammern** (wie ioBroker „Falls … mache“): Jeder Auslöser steht mit seinen eigenen Schritten
+    in einer Klammer *⚡ Wenn eines davon passiert: … mache …*. In HA ist das eine normale Automation mit
+    Trigger-IDs und einer Auswahl nach Auslöser. Neue Automationen starten so; bestehende lassen sich über
+    Rechtsklick auf die Automation → *In Falls-Klammern umwandeln* umstellen (eine vorhandene Verzweigung nach
+    Trigger-ID wird dabei direkt in einzelne Klammern aufgeteilt). Hinweis: „Ausführen“ von Hand startet keine
+    Klammer, weil dabei kein Auslöser mitkommt.
   - **Nur ausgefüllte Angaben:** Leere optionale Felder (Helligkeit, Übergang, Bereich, für …) sind
     ausgeblendet und kommen über das **＋** am Baustein dazu.
   - **Globale Variablen:** Unter
