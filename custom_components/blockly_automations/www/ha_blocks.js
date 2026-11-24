@@ -104,7 +104,7 @@
 
   // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
   const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count)$/;
-  const valuesOn = () => !!(hooks.blockly || hooks.expert);
+  const valuesOn = () => !!(hooks.blockly || hooks.expert || hooks.extended);
   const valueSlot = (f) => valuesOn() && !f.row && !f.dur && ["text", "template", "number"].includes(f.type) && VALUE_PATH.test(f.path);
 
   // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
@@ -143,7 +143,7 @@
   }
 
   // ---------- Farben ----------
-  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290, scene: 330 };
+  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290, scene: 330, gvar: 330 };
   const NONE = "__ha_none__";
   const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen", sceneent: "＋ Entität hinzufügen" };
   const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
@@ -381,6 +381,14 @@
       if (isObj(d)) return mk("⏱️ Warten", duration(a, "delay", ""), [], C.flow);
       return mk("⏱️ Warten", [F("delay", "", { numeric: typeof d === "number" })], [], C.flow);
     }
+    // Version B: Helfer als globale Variable („setze Variable … auf …“). Ist ein normaler Dienstaufruf.
+    const gv = gvarSet(a);
+    if (gv) {
+      const d = gv.domain;
+      const ent = F("target.entity_id", "", { type: "entity", domains: [d] });
+      if (gv.bool) return mk("🧮 setze Wahr/Falsch-Variable", [ent, F("action", "auf", { type: "select", options: [["wahr", "input_boolean.turn_on"], ["falsch", "input_boolean.turn_off"]] })], [], C.gvar);
+      return mk(d === "input_number" ? "🧮 setze Zahl-Variable" : "🧮 setze Text-Variable", [ent, F("data.value", "auf", { type: "text" })], [], C.gvar);
+    }
     if ("action" in a || "service" in a) {
       const key = "action" in a ? "action" : "service";
       const svc = a[key];
@@ -461,6 +469,22 @@
     if (!n && d === "script") { try { n = String(hooks.entityName(svc) || ""); } catch (e) { n = ""; } }
     if (!n) n = `${DOMAIN_DE[d] || hooks.domainName(d) || d} ${SVC_WORDS[s] || s.replace(/_/g, " ")}`;
     return `${icon} ${n}`;
+  }
+
+  // Version B: Ist diese Aktion „globale Variable setzen“? Nur die einfache Form ohne weitere Angaben.
+  const GVAR_SET = { "input_number.set_value": "input_number", "input_text.set_value": "input_text", "input_boolean.turn_on": "input_boolean", "input_boolean.turn_off": "input_boolean" };
+  function gvarSet(a) {
+    if (!hooks.extended || !isObj(a) || typeof a.action !== "string" || !GVAR_SET[a.action]) return null;
+    if (Object.keys(a).some((k) => !["action", "target", "data", "alias", "enabled", "continue_on_error"].includes(k))) return null;
+    // Leere Angaben fehlen im Werkzeugkasten (target {} oder gar nicht da).
+    const t = a.target === undefined ? {} : a.target;
+    if (!isObj(t) || Object.keys(t).some((k) => k !== "entity_id") || (t.entity_id !== undefined && typeof t.entity_id !== "string")) return null;
+    const domain = GVAR_SET[a.action];
+    if (t.entity_id && !t.entity_id.startsWith(domain + ".")) return null;
+    if (domain === "input_boolean") return a.data === undefined ? { domain, bool: true } : null;
+    const d = a.data === undefined ? {} : a.data;
+    if (!isObj(d) || Object.keys(d).some((k) => k !== "value") || (d.value !== undefined && !isPrim(d.value))) return null;
+    return { domain };
   }
 
   const MODE_FIELDS = (cfg) => [
@@ -863,7 +887,8 @@
       attribute: { free: true }, variable: { free: true },
     };
     // Wert-Bausteine: Entität, Zustand, Attribut, Variable mit Auswahlliste.
-    HAV.defineValueBlocks(Blockly, (kind, def) => new FieldPicker(def, { ...PICKER[kind], type: kind, of: "e", placeholder: kind === "variable" ? "⚠ Name" : undefined }));
+    HAV.defineValueBlocks(Blockly, (kind, def, name, extra) => new FieldPicker(def, { ...PICKER[kind], type: kind, of: "e",
+      domains: extra && extra.domains, placeholder: kind === "variable" ? "⚠ Name" : undefined }));
 
     const TIME_HINTS = () => [
       ...["06:00:00", "07:00:00", "08:00:00", "12:00:00", "18:00:00", "20:00:00", "22:00:00"],
@@ -1359,6 +1384,15 @@
           V("trig"), V("trig", { w: "trigger.to_state.state" }), V("trig", { w: "trigger.entity_id" }),
         ]),
         cat("Variablen", 330, [
+          ...(hooks.extended ? [
+            label("Globale Variablen – bleiben nach einem Neustart erhalten (in HA ein Helfer):"),
+            btn("＋ Neue globale Variable anlegen …", "newGlobalVar"),
+            tb("action", { action: "input_number.set_value", target: { entity_id: "" }, data: { value: 0 } }),
+            tb("action", { action: "input_text.set_value", target: { entity_id: "" }, data: { value: "" } }),
+            tb("action", { action: "input_boolean.turn_on", target: { entity_id: "" } }),
+            V("gvar"),
+            label("Lokale Variablen – gelten nur während eines Laufs:"),
+          ] : []),
           tb("action", { variables: { name: "wert" } }),
           V("var"),
           label("Antwort eines Dienstes: im Dienst-Baustein „Antwort in Variable“ eintragen."),

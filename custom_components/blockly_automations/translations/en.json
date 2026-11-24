@@ -22,10 +22,12 @@
         "title": "Blockly Automations settings",
         "description": "Choose how blocks are edited.",
         "data": {
-          "ui_mode": "Editing"
+          "ui_mode": "Editing",
+          "block_set": "Blocks"
         },
         "data_description": {
-          "ui_mode": "Home Assistant dialogs: values are chosen in the original Home Assistant windows (recommended for beginners). Blockly blocks: everything is set directly inside the blocks with searchable lists, all services and device blocks in the toolbox – like the Blockly editor in ioBroker."
+          "ui_mode": "Home Assistant dialogs: values are chosen in the original Home Assistant windows (recommended for beginners). Blockly blocks: everything is set directly inside the blocks with searchable lists, all services and device blocks in the toolbox – like the Blockly editor in ioBroker.",
+          "block_set": "Version A: exactly what the Home Assistant automation contains. Version B: additional ioBroker-style blocks such as global variables; Blockly creates helpers for them on request. Both save normal Home Assistant automations; you can switch back at any time."
         }
       }
     }
@@ -35,6 +37,12 @@
       "options": {
         "ha": "Home Assistant dialogs",
         "blockly": "Blockly blocks"
+      }
+    },
+    "block_set": {
+      "options": {
+        "native": "Version A – Home Assistant blocks",
+        "extended": "Version B – additional ioBroker-style blocks"
       }
     }
   }

@@ -33,6 +33,8 @@
     isstate: { c: 210, parts: [["f", "e", "entity", ""], ["t", "ist"], ["f", "s", "state", ""]], j: (f) => `is_state(${q(f.e)}, ${q(f.s)})` },
     trig: { c: 30, parts: [["t", "Auslöser:"], ["f", "w", "dd", "trigger.id", [["ID", "trigger.id"], ["neuer Zustand", "trigger.to_state.state"],
       ["alter Zustand", "trigger.from_state.state"], ["Entität", "trigger.entity_id"], ["Name", "trigger.to_state.name"]]]], j: (f) => f.w },
+    gvar: { c: 330, parts: [["t", "globale Variable"], ["f", "e", "entity", "", null, { domains: ["input_number", "input_text", "input_boolean"] }]],
+      j: (f) => { const d = String(f.e || "").split(".")[0]; return d === "input_number" ? `states(${q(f.e)}) | float(0)` : d === "input_boolean" ? `is_state(${q(f.e)}, 'on')` : `states(${q(f.e)})`; } },
     var: { c: 330, parts: [["t", "Variable"], ["f", "v", "variable", ""]], j: (f) => (IDENT.test(f.v || "") ? f.v : "none") },
     now: { c: 30, parts: [["t", "jetzt:"], ["f", "w", "dd", "now().strftime('%H:%M')", [["Uhrzeit", "now().strftime('%H:%M')"], ["Stunde", "now().hour"],
       ["Minute", "now().minute"], ["Wochentag (0 = Mo)", "now().weekday()"], ["Datum", "now().strftime('%d.%m.%Y')"]]]], j: (f) => f.w },
@@ -122,12 +124,12 @@
             if (part[0] === "t") inp.appendField(part[1]);
             else if (part[0] === "i") { inp = this.appendValueInput(part[1]).setCheck("HAValue"); n++; }
             else {
-              const [, name, kind, def, opts] = part;
+              const [, name, kind, def, opts, extra] = part;
               let fld;
               if (kind === "num") fld = new Blockly.FieldNumber(def);
               else if (kind === "dd") fld = new Blockly.FieldDropdown(opts);
               else if (kind === "text") fld = new Blockly.FieldTextInput(def);
-              else fld = makePicker(kind, def, name);
+              else fld = makePicker(kind, def, name, extra);
               inp.appendField(fld, name);
             }
             if (part[0] === "i") inp = this.appendDummyInput("D" + n);

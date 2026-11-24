@@ -403,6 +403,47 @@ ok("dienst-titel", () => {
   } finally { HAB.hooks.serviceName = prev; }
 });
 
+// 20c) Version B: globale Variablen sind normale Dienstaufrufe, verlustfrei und mit Wert-Bausteinen.
+ok("version-b-variablen", () => {
+  HAB.hooks.extended = true;
+  try {
+    const cfgs = [
+      { action: "input_number.set_value", target: { entity_id: "input_number.helligkeit" }, data: { value: 80 } },
+      { action: "input_text.set_value", target: { entity_id: "input_text.gruss" }, data: { value: "Hallo" } },
+      { alias: "an", action: "input_boolean.turn_off", target: { entity_id: "input_boolean.urlaub" } },
+      { action: "input_number.set_value", target: { entity_id: "input_number.h" }, data: { value: HAB.HAV.compile({ k: "math", f: { op: "+" }, a: [{ k: "gvar", f: { e: "input_number.h" } }, { k: "num", f: { n: 1 } }] }) } },
+    ];
+    for (const c of cfgs) {
+      const b = toBlocks(c, "action");
+      assert.ok(b.getFieldValue("TITLE").includes("-Variable"), JSON.stringify(c));
+      assert.deepStrictEqual(HAB.blockToItem(b), c);
+    }
+    // Wert-Baustein steckt wieder als Baustein im Feld
+    const b = toBlocks(cfgs[3], "action");
+    assert.ok(b.inputList.some((i) => i.connection && i.connection.targetBlock() && i.connection.targetBlock().type === "ha_v_math"));
+    assert.strictEqual(HAB.HAV.expr({ k: "gvar", f: { e: "input_boolean.x" } }), "is_state('input_boolean.x', 'on')");
+    // Wahr/falsch umstellen ändert nur den Dienst
+    const bb = toBlocks(cfgs[2], "action");
+    const m = bb.fieldMap_.find((x) => x.path === "action");
+    bb.setFieldValue("input_boolean.turn_on", m.name);
+    assert.strictEqual(HAB.blockToItem(bb).action, "input_boolean.turn_on");
+    // Mit weiteren Angaben bleibt es ein normaler Dienst-Baustein
+    assert.ok(!toBlocks({ action: "input_number.set_value", target: { entity_id: "input_number.a", area_id: "x" }, data: { value: 1 } }, "action").getFieldValue("TITLE").includes("Variable"));
+    // Werkzeugkasten Version B: Knopf + Bausteine, alles verlustfrei
+    const box = HAB.buildToolbox("root");
+    const vars = box.contents.find((c) => c.name === "Variablen");
+    assert.ok(vars.contents.some((x) => x.callbackKey === "newGlobalVar"));
+    for (const item of vars.contents.filter((x) => x.kind === "block" && x.extraState)) {
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(item.extraState.raw, item.type.slice(3))), item.extraState.raw);
+    }
+  } finally { HAB.hooks.extended = false; }
+  // Version A: derselbe Aufruf ist ein normaler Dienst-Baustein, ebenfalls verlustfrei
+  const c = { action: "input_number.set_value", target: { entity_id: "input_number.helligkeit" }, data: { value: 80 } };
+  const b = toBlocks(c, "action");
+  assert.ok(!b.getFieldValue("TITLE").includes("Variable"));
+  assert.deepStrictEqual(HAB.blockToItem(b), c);
+});
+
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
 ok("wert-bausteine", () => {
   const HAV = HAB.HAV;

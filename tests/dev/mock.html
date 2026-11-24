@@ -21,6 +21,7 @@
     st("binary_sensor.bad_fenster", "on", { friendly_name: "Bad Fenster" }),
     st("light.flur", "on", { friendly_name: "Flur Licht", brightness: 180, color_mode: "brightness" }),
     st("input_boolean.nachtmodus", "off", { friendly_name: "Nachtmodus" }),
+    st("input_number.helligkeit", "80.0", { friendly_name: "Helligkeit" }),
     st("sun.sun", "below_horizon", { friendly_name: "Sonne" }),
     st("scene.abend", "2026-01-01T00:00:00", { id: "1700", friendly_name: "Abend" }),
   ].forEach((s) => (states[s.entity_id] = s));
@@ -117,6 +118,13 @@
           if (c.condition === "state") return { result: [].concat(c.state).includes((states[c.entity_id] || {}).state) };
           throw { message: "nicht unterstützt" };
         }
+        case "input_number/create": case "input_text/create": case "input_boolean/create": {
+          const dom = msg.type.split("/")[0];
+          const id = msg.name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+          const s = st(`${dom}.${id}`, dom === "input_boolean" ? "off" : dom === "input_number" ? "0.0" : "", { friendly_name: msg.name });
+          states[s.entity_id] = s;
+          return { id, name: msg.name };
+        }
         case "blockly_automations/layout/get": return layouts[msg.key] || null;
         case "blockly_automations/layout/set": layouts[msg.key] = msg.layout; return null;
         default: throw { message: "unbekannt: " + msg.type };
@@ -126,10 +134,10 @@
     connection: { subscribeMessage: (cb, msg) => { setTimeout(() => cb({ result: "(Test) " + msg.template.slice(0, 40) }), 50); return Promise.resolve(() => {}); } },
   };
   window.__mock = { hass, configs, layouts, blueprints, saved };
-  // ?ui=blockly zeigt den Blockly-Modus (sonst HA-Auswahlfenster).
+  // ?ui=blockly zeigt den Blockly-Modus (sonst HA-Auswahlfenster), ?bs=extended Version B.
   const ui = new URLSearchParams(location.search).get("ui") || "ha";
   window.__haBlocklyConfig = { ui_mode: ui };
-  document.getElementById("f").src = "../../custom_components/blockly_automations/www/editor.html?v=dev" + Date.now() + "&ui=" + ui;
+  document.getElementById("f").src = "../../custom_components/blockly_automations/www/editor.html?v=dev" + Date.now() + "&ui=" + ui + "&bs=" + (new URLSearchParams(location.search).get("bs") || "native");
   document.getElementById("f").addEventListener("load", () => {
     const w = document.getElementById("f").contentWindow;
     const go = () => (w.haBlockly ? w.haBlockly.setHass(hass) : setTimeout(go, 50));

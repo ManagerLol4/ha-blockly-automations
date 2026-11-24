@@ -44,6 +44,17 @@ Editor) wählst du die **Bedienung**:
 
 Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
 
+### Version A oder B (Einstellung „Bausteine“)
+
+- **Version A (Standard):** Bausteine zeigen genau das, was in der HA-Automation steht.
+- **Version B:** zusätzlich Bausteine wie bei ioBroker. Bisher: **globale Variablen**. Unter
+  *Variablen → ＋ Neue globale Variable anlegen …* legt Blockly einen Helfer an (Zahl, Text oder
+  Wahr/Falsch). Er behält seinen Wert auch nach einem Neustart. Dazu gibt es die Bausteine
+  *setze Zahl-/Text-/Wahr/Falsch-Variable … auf …* und *globale Variable* zum Lesen.
+
+Auch Version B speichert nur normale HA-Automationen und Helfer. Beim Zurückwechseln auf A läuft alles
+weiter, die Bausteine erscheinen dann als normale Dienstaufrufe (z. B. *Zahlen-Helfer Wert setzen*).
+
 ### Im Blockly-Modus zusätzlich
 
 - **Werte & Logik:** Bausteine wie *Zustand von …*, *Zahl von …*, *Attribut*, *Auslöser: neuer Zustand*,

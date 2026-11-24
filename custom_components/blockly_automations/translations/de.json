@@ -22,10 +22,12 @@
         "title": "Einstellungen Blockly Automations",
         "description": "Lege fest, wie Bausteine bearbeitet werden.",
         "data": {
-          "ui_mode": "Bedienung"
+          "ui_mode": "Bedienung",
+          "block_set": "Bausteine"
         },
         "data_description": {
-          "ui_mode": "Home-Assistant-Fenster: Werte werden in den originalen HA-Auswahlfenstern gewählt (empfohlen für Einsteiger). Blockly-Bausteine: alles wird direkt im Baustein eingestellt – mit durchsuchbaren Listen, allen Diensten und Geräte-Bausteinen im Werkzeugkasten, wie im Blockly-Editor von ioBroker."
+          "ui_mode": "Home-Assistant-Fenster: Werte werden in den originalen HA-Auswahlfenstern gewählt (empfohlen für Einsteiger). Blockly-Bausteine: alles wird direkt im Baustein eingestellt – mit durchsuchbaren Listen, allen Diensten und Geräte-Bausteinen im Werkzeugkasten, wie im Blockly-Editor von ioBroker.",
+          "block_set": "Version A: genau das, was in der Home-Assistant-Automation steht. Version B: zusätzlich Bausteine wie bei ioBroker, z. B. globale Variablen. Dafür legt Blockly auf Wunsch Helfer an. Gespeichert wird in beiden Fällen als normale Home-Assistant-Automation; du kannst jederzeit zurückwechseln."
         }
       }
     }
@@ -35,6 +37,12 @@
       "options": {
         "ha": "Home-Assistant-Auswahlfenster",
         "blockly": "Blockly-Bausteine"
+      }
+    },
+    "block_set": {
+      "options": {
+        "native": "Version A – Home-Assistant-Bausteine",
+        "extended": "Version B – zusätzlich Bausteine wie bei ioBroker"
       }
     }
   }

@@ -27,11 +27,12 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
   }
 
   set panel(panel) {
-    const before = this._panel && this._panel.config && this._panel.config.ui_mode;
+    const sig = (c) => (c ? `${c.ui_mode}|${c.block_set}` : undefined);
+    const before = sig(this._panel && this._panel.config);
     this._panel = panel;
     window.__haBlocklyConfig = (panel && panel.config) || {};
     // Einstellung „Bedienung“ geändert: Editor mit der neuen Einstellung neu laden.
-    const now = window.__haBlocklyConfig.ui_mode;
+    const now = sig(window.__haBlocklyConfig);
     if (this._frame && before !== undefined && now !== before) this._frame.src = this._frame.src;
     this._render();
   }
