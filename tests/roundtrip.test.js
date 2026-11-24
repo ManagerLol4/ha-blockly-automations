@@ -341,7 +341,7 @@ ok("blockly-modus", () => {
     const all = box.contents.find((c) => c.name === "Alle Dienste");
     assert.deepStrictEqual(all.contents.map((c) => c.contents.length).reduce((a, b) => a + b, 0), 4);
     const walk = (c) => (c.contents || []).flatMap((x) => (x.kind === "category" ? walk(x) : [x]));
-    for (const item of walk(box).filter((x) => x.kind === "block")) {
+    for (const item of walk(box).filter((x) => x.kind === "block" && x.extraState)) {
       const raw = item.extraState.raw;
       assert.deepStrictEqual(HAB.blockToItem(toBlocks(raw, item.type.slice(3))), raw, `Werkzeugkasten Blockly ${JSON.stringify(raw)}`);
     }
@@ -374,6 +374,116 @@ ok("blockly-modus", () => {
     HAB.hooks.serviceTarget = () => null;
     HAB.hooks.deviceEntry = () => null;
   }
+});
+
+// 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
+ok("wert-bausteine", () => {
+  const HAV = HAB.HAV;
+  const tree = { k: "cmp", f: { op: ">" }, a: [{ k: "statenum", f: { e: "sensor.t" } }, { k: "num", f: { n: 20 } }] };
+  const tpl = HAV.compile(tree);
+  assert.ok(tpl.startsWith("{{ (states('sensor.t') | float(0)) > (20) }}{#hab:"), tpl);
+  assert.deepStrictEqual(HAV.decode(tpl), tree);
+  assert.strictEqual(HAV.decode("{{ states('x') }}"), null, "fremdes Template bleibt Text");
+  assert.strictEqual(HAV.decode(tpl.replace("20", "21")), null, "von Hand geändert -> Text");
+  assert.strictEqual(HAV.expr({ k: "txt", f: { s: "it's \\ ok" } }), "'it\\'s \\\\ ok'");
+  assert.strictEqual(HAV.expr({ k: "join", a: [{ k: "txt", f: { s: "Temp: " } }, null] }), "('Temp: ') ~ (none)");
+  assert.strictEqual(HAV.expr({ k: "var", f: { v: "x; drop" } }), "none");
+  HAB.hooks.blockly = true;
+  try {
+    const cfg = {
+      triggers: [{ trigger: "state", entity_id: "sensor.t" }],
+      conditions: [{ condition: "template", value_template: tpl }],
+      actions: [{ action: "notify.notify", data: { message: HAV.compile({ k: "join", a: [{ k: "txt", f: { s: "Temp: " } }, { k: "state", f: { e: "sensor.t" } }] }), title: "{{ handgeschrieben }}" } }],
+    };
+    const r = toBlocks(cfg);
+    assert.deepStrictEqual(HAB.blockToItem(r), cfg, "verlustfrei mit Wert-Bausteinen");
+    const cond = child(r, "L1");
+    const vin = cond.fieldMap_.find((x) => x.path === "value_template").vin;
+    const vb = cond.getInputTargetBlock(vin);
+    assert.ok(vb && vb.type === "ha_v_cmp", "Bedingung als Bausteine");
+    assert.strictEqual(cond.getField(cond.fieldMap_.find((x) => x.path === "value_template").name).isVisible(), false);
+    // Zahl ändern -> neues Template
+    vb.getInputTargetBlock("B").setFieldValue(25, "n");
+    assert.match(HAB.blockToItem(r).conditions[0].value_template, /^\{\{ \(states\('sensor\.t'\) \| float\(0\)\) > \(25\) \}\}/);
+    // handgeschriebenes Template bleibt Textfeld
+    const act = child(r, "L2");
+    const tm = act.fieldMap_.find((x) => x.path === "data.title");
+    assert.ok(tm.vin && !act.getInputTargetBlock(tm.vin));
+    // Baustein entfernen -> Feld wird leer -> Wert entfällt
+    vb.unplug(false);
+    cond.onchange();
+    assert.ok(!("value_template" in HAB.blockToItem(r).conditions[0]) || HAB.blockToItem(r).conditions[0].value_template === undefined);
+    // Neuer Wert-Baustein in ein leeres Datenfeld
+    const act2 = toBlocks({ action: "light.turn_on", data: { brightness_pct: 50 } }, "action");
+    const bm = act2.fieldMap_.find((x) => x.path === "data.brightness_pct");
+    const nb = Blockly.serialization.blocks.append(HAV.treeToBlockJson({ k: "statenum", f: { e: "input_number.h" } }), ws);
+    act2.getInput(bm.vin).connection.connect(nb.outputConnection);
+    const out = HAB.blockToItem(act2).data.brightness_pct;
+    assert.ok(out.startsWith("{{ states('input_number.h') | float(0) }}") && HAV.decode(out));
+    // Ohne Blockly-Modus: Templates bleiben einfach Text (verlustfrei)
+    HAB.hooks.blockly = false;
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(cfg)), cfg);
+  } finally {
+    HAB.hooks.blockly = false;
+  }
+});
+
+// 22) YAML-Ansicht.
+ok("yaml", () => {
+  const y = HAB.toYaml({ alias: "Test", triggers: [{ trigger: "state", entity_id: ["a.b", "c.d"], to: "on" }], conditions: [], data: { message: "Hallo: Welt", n: 3, on: true, t: "{{ x }}" } });
+  assert.strictEqual(y, [
+    "alias: Test",
+    "triggers:",
+    "  - trigger: state",
+    "    entity_id:",
+    "      - a.b",
+    "      - c.d",
+    '    to: "on"',
+    "conditions: []",
+    "data:",
+    '  message: "Hallo: Welt"',
+    "  n: 3",
+    "  \"on\": true",
+    '  t: "{{ x }}"',
+  ].join("\n"));
+});
+
+// 23) Als Skript auslagern: Auslöser-Daten und Variablen werden übergeben, Verhalten bleibt gleich.
+ok("skript-auslagern", () => {
+  const HAV = HAB.HAV;
+  const tplTree = { k: "join", a: [{ k: "txt", f: { s: "Neu: " } }, { k: "trig", f: { w: "trigger.to_state.state" } }] };
+  const items = [
+    { action: "notify.notify", data: { message: "{{ trigger.to_state.name }} ist {{ trigger.to_state.state }} ({{ grenze }})", title: HAV.compile(tplTree) } },
+    { choose: [{ conditions: [{ condition: "trigger", id: ["an", "1"], alias: "an?" }], sequence: [{ delay: 1 }] }] },
+    { variables: { intern: 5 } },
+    { action: "light.turn_on", data: { brightness_pct: "{{ intern }}" } },
+    { repeat: { count: 2, sequence: [{ action: "logbook.log", data: { message: "{{ repeat.index }}" } }] } },
+    { action: "logbook.log", data: { message: "'trigger.id' bleibt Text, {{ unbekannt }} bleibt" } },
+  ];
+  const plan = HAB.planExtract(items, ["grenze", "intern", "nicht_genutzt"]);
+  // Übergabe: genau die genutzten Werte
+  assert.deepStrictEqual(Object.keys(plan.data).sort(), ["grenze", "trigger_id", "trigger_to_state_name", "trigger_to_state_state"]);
+  assert.strictEqual(plan.data.trigger_to_state_state, "{{ trigger.to_state.state }}");
+  assert.strictEqual(plan.data.grenze, "{{ grenze }}");
+  assert.deepStrictEqual(Object.keys(plan.fields).sort(), Object.keys(plan.data).sort());
+  // Umschreiben im Skript
+  assert.strictEqual(plan.sequence[0].data.message, "{{ trigger_to_state_name }} ist {{ trigger_to_state_state }} ({{ grenze }})");
+  const t = HAV.decode(plan.sequence[0].data.title);
+  assert.ok(t, "Wert-Bausteine bleiben Bausteine");
+  assert.deepStrictEqual(t.a[1], { k: "var", f: { v: "trigger_to_state_state" } });
+  assert.deepStrictEqual(plan.sequence[1].choose[0].conditions[0], { condition: "template", value_template: "{{ (trigger_id | string) in ['an', '1'] }}", alias: "an?" });
+  // Eigene Variablen und repeat innerhalb der Schritte bleiben intern
+  assert.strictEqual(plan.sequence[3].data.brightness_pct, "{{ intern }}");
+  assert.strictEqual(plan.sequence[4].repeat.sequence[0].data.message, "{{ repeat.index }}");
+  assert.strictEqual(plan.sequence[5].data.message, "'trigger.id' bleibt Text, {{ unbekannt }} bleibt");
+  assert.ok(plan.notes.some((n) => /intern/.test(n)));
+  // Ohne Bezüge: nichts zu übergeben
+  const p2 = HAB.planExtract([{ action: "light.turn_on", target: { entity_id: "light.a" } }], ["x"]);
+  assert.deepStrictEqual([p2.fields, p2.data, p2.notes], [{}, {}, []]);
+  // repeat.index außerhalb der Schritte wird übergeben
+  const p3 = HAB.planExtract([{ action: "logbook.log", data: { message: "{{ repeat.index }}" } }]);
+  assert.deepStrictEqual(p3.data, { repeat_index: "{{ repeat.index }}" });
+  assert.strictEqual(p3.sequence[0].data.message, "{{ repeat_index }}");
 });
 
 // 13) Versionsnummern stimmen überein (manifest, package.json, version.json).

@@ -8,6 +8,7 @@
  */
 (function (root) {
   "use strict";
+  const HAV = typeof module === "object" && module.exports ? require("./ha_values.js") : root.HAV;
 
   // ---------- Hilfsfunktionen ----------
   const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -91,7 +92,15 @@
     optionLabel: () => "",       // (type, wert, ctx) -> Anzeige eines gewählten Werts
     deviceEntry: () => null,     // (schlüssel) -> vollständiger Eintrag einer Geräte-Automation
     domainName: (d) => d,        // ("light") -> "Licht"
+    toolboxSearch: false,        // Suche im Werkzeugkasten (Plugin geladen)
+    addVariable: null,           // (block) -> neue Variable in „Variablen setzen“
+    ifToChoose: null,            // (block) -> „Wenn“ um „sonst wenn“ erweitern (wird zur Auswahl)
+    extractScript: null,         // (block, alle folgenden?) -> Schritte als neues Skript auslagern
   };
+
+  // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
+  const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count)$/;
+  const valueSlot = (f) => hooks.blockly && !f.row && !f.dur && ["text", "template", "number"].includes(f.type) && VALUE_PATH.test(f.path);
 
   // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
   // Zeiträume (Std/Min/Sek) werden zu einem Wert zusammengefasst, Profi-Optionen
@@ -482,6 +491,15 @@
     const spec = specFor(kind, item);
     const json = { type: "ha_" + kind, extraState: { raw: clone(item) } };
     if (isObj(item) && item.enabled === false && !ROOTS.has(kind)) json.enabled = false;
+    // Templates aus Wert-Bausteinen wieder als Bausteine einstecken.
+    if (hooks.blockly && isObj(item)) {
+      spec.fields.forEach((f, i) => {
+        if (!valueSlot(f)) return;
+        const tree = HAV.decode(getPath(item, f.path));
+        const vb = tree && HAV.treeToBlockJson(tree);
+        if (vb) (json.inputs = json.inputs || {})["V" + i] = { block: vb };
+      });
+    }
     spec.lists.forEach((l, i) => {
       const v = getPath(item, l.path);
       if (v === undefined || v === null) return;
@@ -551,6 +569,14 @@
         if (!sel.length) delPath(out, f.path);
         else setPath(out, f.path, typeof f.orig === "string" && sel.length === 1 ? sel[0] : sel);
         continue;
+      }
+      if (f.vin) {
+        const vb = b.getInputTargetBlock(f.vin);
+        if (vb && vb.isEnabled()) {
+          const val = HAV.compileBlock(vb);
+          if (val !== f.origStr) setPath(out, f.path, val);
+          continue;
+        }
       }
       let val = b.getFieldValue(f.name);
       if (val === NONE) val = "";
@@ -753,7 +779,10 @@
     const PICKER = {
       entity: { free: true }, state: { free: true }, service: { free: true }, area: { free: true }, device: { free: false },
       floor: { free: true }, time: { free: true }, triggerid: { free: true, multi: true }, devauto: { free: false },
+      attribute: { free: true }, variable: { free: true },
     };
+    // Wert-Bausteine: Entität, Zustand, Attribut, Variable mit Auswahlliste.
+    HAV.defineValueBlocks(Blockly, (kind, def) => new FieldPicker(def, { ...PICKER[kind], type: kind, of: "e", placeholder: kind === "variable" ? "⚠ Name" : undefined }));
 
     const TIME_HINTS = () => [
       ...["06:00:00", "07:00:00", "08:00:00", "12:00:00", "18:00:00", "20:00:00", "22:00:00"],
@@ -793,10 +822,30 @@
 
     const mixin = {
       saveExtraState() { return { raw: this.raw_ }; },
+      onchange() {
+        if (this.isInFlyout || !this.fieldMap_ || this.isDeadOrDying && this.isDeadOrDying()) return;
+        for (const m of this.fieldMap_) {
+          if (!m.vin) continue;
+          const fld = this.getField(m.name);
+          if (!fld) continue;
+          const plugged = !!this.getInputTargetBlock(m.vin);
+          if (plugged === fld.isVisible()) {
+            fld.setVisible(!plugged);
+            // Baustein entfernt: Feld leer (sonst stünde dort das alte Template).
+            if (!plugged && HAV.decode(fld.getValue())) fld.setValue("");
+            if (this.rendered) this.render();
+          }
+        }
+      },
       customContextMenu(options) {
         if (this.isInFlyout || ROOTS.has(this.haKind_) || !hooks.renameBlock || !isObj(this.raw_)) return;
         const block = this;
         options.unshift({ text: "✏️ Name / Kommentar …", enabled: true, callback: () => hooks.renameBlock(block) });
+        if (hooks.extractScript && (this.haKind_ === "action" || this.haKind_ === "condition") && this.previousConnection &&
+            this.previousConnection.targetConnection && (this.previousConnection.getCheck() || []).includes("ha_action")) {
+          options.push({ text: "📜 Als neues Skript auslagern (dieser Schritt)", enabled: true, callback: () => hooks.extractScript(block, false) });
+          if (this.getNextBlock()) options.push({ text: "📜 Als neues Skript auslagern (ab hier bis zum Ende)", enabled: true, callback: () => hooks.extractScript(block, true) });
+        }
       },
       loadExtraState(state) { this.build_(state && state.raw !== undefined ? state.raw : {}); },
       build_(raw) {
@@ -860,7 +909,9 @@
           const v = getPath(raw, f.path);
           if (v === undefined && f.show === "present") return;
           let inp;
-          if (f.row && rows[f.row]) inp = rows[f.row];
+          const slot = valueSlot(f) && !this.isInFlyout;
+          if (slot) inp = this.appendValueInput("V" + i).setCheck("HAValue");
+          else if (f.row && rows[f.row]) inp = rows[f.row];
           else {
             inp = this.appendDummyInput("FI" + i);
             if (f.row) rows[f.row] = inp;
@@ -892,7 +943,9 @@
           const str = f.type === "devauto" ? devKey(raw) : toFieldString(v, f);
           const fld = makeField(this, { ...f, orig: v }, str);
           inp.appendField(fld, name);
-          this.fieldMap_.push({ name, path: f.path, orig: v, origStr: str, type: f.type, numeric: f.numeric });
+          this.fieldMap_.push({ name, path: f.path, orig: v, origStr: str, type: f.type, numeric: f.numeric, vin: slot ? "V" + i : undefined });
+          // Wert kommt aus Bausteinen: Textfeld ausblenden (Inhalt bleibt das Original).
+          if (slot && HAV.decode(v)) fld.setVisible(false);
           if (hooks.blockly && PICKER[f.type]) {
             if (f.type === "entity" || f.type === "service") fld.setTooltip && fld.setTooltip(str);
             if (f.type === "service") this.serviceField_ = name;
@@ -917,6 +970,11 @@
           this.appendDummyInput("SFIELDS").appendField("Eingaben").appendField(
             new FieldButton(keys.length ? keys.join(", ") : "keine – hinzufügen …", () => hooks.editScriptFields(block), "ha-chip"), "SFB");
         }
+        if (hooks.blockly && !this.isInFlyout && this.haKind_ === "action" && isObj(raw)) {
+          const block = this;
+          if (isObj(raw.variables) && hooks.addVariable)
+            this.appendDummyInput("ADDVAR").appendField(new FieldButton("＋ Variable", () => hooks.addVariable(block), "ha-add"), "ADDVARB");
+        }
         this.listMap_ = [];
         spec.lists.forEach((l, i) => {
           const name = "L" + i;
@@ -927,6 +985,11 @@
             const block = this;
             this.appendDummyInput("ADD" + i).appendField(
               new FieldButton(ADD_LABEL[l.kind] || "＋ hinzufügen", () => hooks.addItem(block, name, l.kind), "ha-add"), "ADDB" + i);
+          }
+          // „Wenn … dann“: weitere Zweige („sonst wenn“) – der Baustein wird dann zur Auswahl.
+          if (hooks.ifToChoose && !this.isInFlyout && this.haKind_ === "action" && l.path === "then") {
+            const block = this;
+            this.appendDummyInput("ELIF").appendField(new FieldButton("＋ sonst wenn …", () => hooks.ifToChoose(block), "ha-add"), "ELIFB");
           }
         });
       },
@@ -1027,6 +1090,7 @@
     const forKind = (box) => {
       if (kind === "script") box.contents = box.contents.filter((c) => c.colour !== String(C.trigger));
       box.contents.push(scriptCat);
+      if (hooks.toolboxSearch) box.contents.unshift({ kind: "search", name: "🔎 Suche", contents: [] });
       return box;
     };
 
@@ -1123,9 +1187,21 @@
           label("Für alles ohne eigenen Block – rechts im JSON-Feld bearbeiten"),
           tb("action", {}),
         ] }]),
-        ...(hooks.blockly ? [allServicesCat()] : []),
+        ...(hooks.blockly ? [allServicesCat(), valuesCat()] : []),
       ],
     });
+  }
+
+  // Blockly-Modus: Werte & Logik (werden zu Templates) und die Bedingung, die sie aufnimmt.
+  function valuesCat() {
+    return {
+      kind: "category", name: "Werte & Logik", colour: "210",
+      contents: [
+        { kind: "label", text: "Bedingung aus Logik-Bausteinen (Logik in die Lücke stecken):" },
+        tb("condition", { condition: "template", value_template: "" }),
+        ...HAV.toolboxContents(),
+      ],
+    };
   }
 
   // Blockly-Modus: alle Dienste aus HA, nach Bereich (Domain) sortiert.
@@ -1368,9 +1444,171 @@
     return null;
   }
 
+  // ---------- YAML-Ansicht (nur zum Lesen) ----------
+  const YAML_PLAIN = /^[A-Za-z_À-ɏ][A-Za-z0-9_ .\-\/À-ɏ]*$/;
+  const YAML_RESERVED = /^(true|false|yes|no|on|off|null|~)$/i;
+  function yScalar(v) {
+    if (v === null || v === undefined) return "null";
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    const s = String(v);
+    if (s === "") return '""';
+    if (YAML_PLAIN.test(s) && !YAML_RESERVED.test(s) && !/\s$/.test(s) && !/: /.test(s)) return s;
+    return JSON.stringify(s);
+  }
+  function toYaml(v, ind = "") {
+    if (Array.isArray(v)) {
+      if (!v.length) return "[]";
+      return v.map((x) => {
+        if (isObj(x) && Object.keys(x).length) {
+          const inner = toYaml(x, ind + "  ");
+          return `${ind}- ${inner.slice(ind.length + 2)}`;
+        }
+        if (Array.isArray(x) && x.length) return `${ind}-\n${toYaml(x, ind + "  ")}`;
+        return `${ind}- ${isObj(x) ? "{}" : yScalar(x)}`;
+      }).join("\n");
+    }
+    if (isObj(v)) {
+      const keys = Object.keys(v);
+      if (!keys.length) return "{}";
+      return keys.map((k) => {
+        const x = v[k];
+        const key = yScalar(k);
+        if (isObj(x) && Object.keys(x).length) return `${ind}${key}:\n${toYaml(x, ind + "  ")}`;
+        if (Array.isArray(x) && x.length) return `${ind}${key}:\n${toYaml(x, ind + "  ")}`;
+        if (typeof x === "string" && x.includes("\n")) return `${ind}${key}: |-\n${x.split("\n").map((l) => ind + "  " + l).join("\n")}`;
+        return `${ind}${key}: ${isObj(x) ? "{}" : Array.isArray(x) ? "[]" : yScalar(x)}`;
+      }).join("\n");
+    }
+    return ind + yScalar(v);
+  }
+
+  /* ---------- Schritte als Skript auslagern ----------
+   * Ein Skript sieht die Variablen der Automation nicht (trigger, repeat, wait, eigene
+   * Variablen). Deshalb: genutzte Werte als Eingaben (fields) anlegen, beim Aufruf
+   * übergeben und im Skript auf die Eingaben umschreiben.
+   *   items: die ausgelagerten Schritte; known: Variablennamen der Automation.
+   * Ergebnis: { fields, data, sequence, notes } */
+  const CTX_ROOTS = ["trigger", "repeat", "wait", "this"];
+  const TPL_SPLIT = /(\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\})/;
+  const stripStrings = (t) => t.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g, "''");
+  const dottedRe = () => /(?<![\w.])(trigger|repeat|wait|this)((?:\.[A-Za-z_]\w*)+)/g;
+  const fieldNameOf = (expr) => expr.replace(/\./g, "_");
+  function deepStrings(v, fn) {
+    if (typeof v === "string") fn(v);
+    else if (Array.isArray(v)) v.forEach((x) => deepStrings(x, fn));
+    else if (isObj(v)) Object.values(v).forEach((x) => deepStrings(x, fn));
+  }
+  function deepMap(v, fn) {
+    if (typeof v === "string") return fn(v);
+    if (Array.isArray(v)) return v.map((x) => deepMap(x, fn));
+    if (isObj(v)) { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = deepMap(x, fn); return o; }
+    return v;
+  }
+  function deepWalk(v, fn) {
+    if (Array.isArray(v)) v.forEach((x) => deepWalk(x, fn));
+    else if (isObj(v)) { fn(v); Object.values(v).forEach((x) => deepWalk(x, fn)); }
+  }
+  // Variablen-Bezüge in einem Template: { dotted: Set("trigger.to_state.state"), plain: Set("helligkeit"), bare: Set("trigger") }
+  function templateRefs(str, known) {
+    const out = { dotted: new Set(), plain: new Set(), bare: new Set() };
+    for (const part of String(str).split(TPL_SPLIT)) {
+      if (!TPL_SPLIT.test(part)) continue;
+      const code = stripStrings(part.replace(/\{#[\s\S]*?#\}/g, ""));
+      for (const m of code.matchAll(dottedRe())) out.dotted.add(m[1] + m[2]);
+      for (const m of code.matchAll(/(?<![\w.])([A-Za-z_]\w*)(?![\w(])/g)) {
+        const n = m[1];
+        if (CTX_ROOTS.includes(n)) { if (!new RegExp(`(?<![\\w.])${n}\\.`).test(code)) out.bare.add(n); continue; }
+        if (known.has(n)) out.plain.add(n);
+      }
+    }
+    return out;
+  }
+  function planExtract(items, known = []) {
+    const knownSet = new Set(known);
+    // Was die Schritte selbst festlegen, muss nicht übergeben werden.
+    const defined = new Set();
+    let hasRepeat = false, hasWait = false;
+    deepWalk(items, (o) => {
+      if (isObj(o.variables)) Object.keys(o.variables).forEach((k) => defined.add(k));
+      if (typeof o.response_variable === "string") defined.add(o.response_variable);
+      if ("repeat" in o) hasRepeat = true;
+      if ("wait_for_trigger" in o || "wait_template" in o) hasWait = true;
+    });
+    const internal = (expr) => (expr.startsWith("repeat.") && hasRepeat) || (expr.startsWith("wait.") && hasWait);
+    const dotted = new Set(), plain = new Set(), bare = new Set();
+    let triggerCond = false;
+    deepWalk(items, (o) => { if (o.condition === "trigger") { triggerCond = true; dotted.add("trigger.id"); } });
+    deepStrings(items, (str) => {
+      const tree = HAV.decode(str);
+      const r = templateRefs(str, knownSet);
+      r.dotted.forEach((x) => dotted.add(x));
+      r.plain.forEach((x) => plain.add(x));
+      r.bare.forEach((x) => bare.add(x));
+      if (tree) (function walk(t) {
+        if (!t) return;
+        if (t.k === "trig" && t.f) dotted.add(t.f.w);
+        if (t.k === "var" && t.f && /^(trigger|repeat|wait|this)\./.test(t.f.v)) dotted.add(t.f.v);
+        (t.a || []).forEach(walk);
+      })(tree);
+    });
+    const pass = [...dotted].filter((d) => !internal(d)).sort((a, b) => b.length - a.length);
+    const plainPass = [...plain].filter((n) => !defined.has(n));
+    const map = {};
+    for (const d of pass) map[d] = fieldNameOf(d);
+    // Umschreiben: Templates (auch Wert-Bausteine) und „Ausgelöst durch ID“.
+    const rewriteText = (str) => str.split(TPL_SPLIT).map((part) => {
+      if (!TPL_SPLIT.test(part)) return part;
+      let out = part;
+      for (const d of pass) out = out.replace(new RegExp(`(?<![\\w.])${d.replace(/\./g, "\\.")}(?![\\w])`, "g"), map[d]);
+      return out;
+    }).join("");
+    const rewriteTree = (t) => {
+      if (!t) return t;
+      const n = clone(t);
+      if (n.k === "trig" && n.f && map[n.f.w]) { n.k = "var"; n.f = { v: map[n.f.w] }; }
+      else if (n.k === "var" && n.f && map[n.f.v]) n.f = { v: map[n.f.v] };
+      if (n.a) n.a = n.a.map(rewriteTree);
+      return n;
+    };
+    let sequence = deepMap(items, (str) => {
+      const tree = HAV.decode(str);
+      return tree ? HAV.compile(rewriteTree(tree)) : rewriteText(str);
+    });
+    if (triggerCond) {
+      const fix = (v) => {
+        if (Array.isArray(v)) return v.map(fix);
+        if (!isObj(v)) return v;
+        const o = {};
+        for (const [k, x] of Object.entries(v)) o[k] = fix(x);
+        if (o.condition === "trigger") {
+          const ids = [].concat(o.id === undefined ? [] : o.id).map((x) => "'" + String(x).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'");
+          const n = { condition: "template", value_template: `{{ (${map["trigger.id"]} | string) in [${ids.join(", ")}] }}` };
+          for (const k of ["alias", "enabled"]) if (o[k] !== undefined) n[k] = o[k];
+          return n;
+        }
+        return o;
+      };
+      sequence = fix(sequence);
+    }
+    const fields = {}, data = {};
+    for (const d of pass) {
+      fields[map[d]] = { name: d, description: "Wird von der aufrufenden Automation übergeben.", selector: { text: {} } };
+      data[map[d]] = `{{ ${d} }}`;
+    }
+    for (const n of plainPass) {
+      fields[n] = { name: n, description: "Variable der aufrufenden Automation.", selector: { object: {} } };
+      data[n] = `{{ ${n} }}`;
+    }
+    const notes = [];
+    if (bare.size) notes.push(`Die Schritte nutzen „${[...bare].join(", ")}“ als Ganzes – das lässt sich nicht übergeben. Bitte im Skript prüfen.`);
+    const leaking = [...defined];
+    if (leaking.length) notes.push(`Variablen aus den ausgelagerten Schritten (${leaking.join(", ")}) stehen danach in der Automation nicht mehr zur Verfügung.`);
+    return { fields, data, sequence, notes };
+  }
+
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

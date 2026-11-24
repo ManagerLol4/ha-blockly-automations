@@ -19,6 +19,8 @@ Wir bauen das zu zweit (oder mehr) – so bleibt es übersichtlich:
 | `www/panel-main.js` | Seitenleisten-Element, bettet den Editor als iframe ein; öffnet die originalen HA-Dialoge: „… hinzufügen“ (über eine unsichtbare `ha-automation-trigger/condition/action`-Liste) und Eigenschaften (`ha-automation-*-editor` in `ha-dialog`). Beide hängen im Panel-Element, damit HA-Kontextdaten ankommen |
 | `www/version.json` | Aktuelle Version für den Lader – mit `node scripts/bump.js x.y.z` setzen |
 | `www/ha_blocks.js` | **Herzstück:** Blockdefinitionen und Umwandlung HA ↔ Blöcke (Automation `ha_root`, Skript `ha_script`, Blueprint-Eingaben). Außerdem ohne Browser testbar: Pfade wie in HA-Traces (`walkConfig`, `collectPaths`), Prüfregeln (`lint`), Querverweise (`references`), Trigger-IDs |
+| `www/ha_values.js` | Wert- und Logik-Bausteine (Blockly-Modus): Definitionen, Baum ↔ Jinja (`compile`/`decode` mit `{#hab:…#}`-Kommentar), Werkzeugkasten „Werte & Logik“ |
+| `www/vendor/plugins/` | Blockly-Plugins (Apache-2.0): toolbox-search, plugin-cross-tab-copy-paste, workspace-backpack – mit `npm run vendor` aktualisieren |
 | `www/editor.js` | Laden/Speichern über die HA-API (Automationen und Skripte), Liste, JSON-Seitenleiste, Inspektor (Traces über `trace/list`/`trace/get`, Live über `test_condition`, Template-Vorschau über `render_template`), Querverweise, Selbsttest, Darstellung speichern |
 | `__init__.py` | außerdem Websocket-Befehle `blockly_automations/layout/get|set` für eingeklappte Bausteine (`.storage/blockly_automations.layout`) |
 | `tests/dev/mock.html` | Test-Seite mit erfundenem Mini-HA (`npm run dev`) – zum Ausprobieren ohne echtes HA |

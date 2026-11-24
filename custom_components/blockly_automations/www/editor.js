@@ -368,13 +368,13 @@
   };
 
   // Rechtsklick „Name / Kommentar“: setzt alias – steht dann im Baustein und im Ablauf-Protokoll.
-  HAB.hooks.renameBlock = (block) => {
+  HAB.hooks.renameBlock = async (block) => {
     if (!block || block.isDisposed() || block.isInFlyout) return;
     const item = HAB.blockToItem(block);
     if (!isObj(item)) return;
     const cur = typeof item.alias === "string" ? item.alias : "";
-    const v = prompt("Name / Kommentar für diesen Schritt\n(erscheint im Baustein und im Ablauf-Protokoll von HA):", cur);
-    if (v === null || v.trim() === cur) return;
+    const v = await askText("Name / Kommentar für diesen Schritt", cur, "Erscheint im Baustein und im Ablauf-Protokoll von HA. Leer = entfernen.");
+    if (v === null || v.trim() === cur || block.isDisposed()) return;
     if (v.trim()) item.alias = v.trim(); else delete item.alias;
     replaceBlock(block, item);
   };
@@ -424,7 +424,7 @@
     const b = field.getSourceBlock();
     if (!b) return "";
     const m = (b.fieldMap_ || []).find((x) => x.path === path);
-    const v = m ? b.getFieldValue(m.name) : HAB.getPath(b.raw_, path);
+    const v = m ? b.getFieldValue(m.name) : b.getField && b.getField(path) ? b.getFieldValue(path) : HAB.getPath(b.raw_, path);
     return typeof v === "string" ? v.split(",")[0].trim() : Array.isArray(v) ? v[0] : "";
   };
   const devTypeKey = { trigger: "trigger_type", condition: "condition_type", action: "action_type" };
@@ -465,6 +465,12 @@
             .map((s) => [s.entity_id, fname(s) || s.entity_id, "Helfer / Sensor"])];
       case "triggerid":
         return HAB.triggerIds(currentConfig()).map((x) => [x, x]);
+      case "attribute": {
+        const st = S.hass.states[siblingValue(field, def.of || "entity_id")];
+        return st ? Object.keys(st.attributes).map((a) => [a, pretty(a), "", String(st.attributes[a]).slice(0, 40)]) : [];
+      }
+      case "variable":
+        return variableNames().map((v) => [v, v]);
       case "devauto": {
         const dev = siblingValue(field, "device_id");
         if (!dev) return Promise.reject(new Error("Bitte zuerst ein Gerät wählen"));
@@ -508,6 +514,109 @@
       status(`Baustein aus „${TOOLBOX_CAT[kind]}“ in die Lücke ziehen`, "ok");
     } catch (e) { /* optional */ }
   }
+  // Namen von Variablen, die in der offenen Automation/im Skript vorkommen.
+  function variableNames() {
+    const out = new Set();
+    const cfg = currentConfig();
+    if (!cfg) return [];
+    if (isObj(cfg.variables)) Object.keys(cfg.variables).forEach((k) => out.add(k));
+    if (isObj(cfg.trigger_variables)) Object.keys(cfg.trigger_variables).forEach((k) => out.add(k));
+    if (isObj(cfg.fields)) Object.keys(cfg.fields).forEach((k) => out.add(k));
+    HAB.walkConfig(cfg, rootKind(), (item) => {
+      if (isObj(item) && isObj(item.variables)) Object.keys(item.variables).forEach((k) => out.add(k));
+      if (isObj(item) && typeof item.response_variable === "string") out.add(item.response_variable);
+      if (isObj(item) && isObj(item.repeat)) { out.add("repeat.index"); if ("for_each" in item.repeat) out.add("repeat.item"); }
+    });
+    return [...out];
+  }
+
+  // Eigenes Eingabefenster (statt prompt(), das in der HA-App oft nicht erscheint).
+  function askText(title, value = "", hint = "") {
+    return new Promise((resolve) => {
+      const box = $("ask");
+      $("askTitle").textContent = title;
+      $("askHint").textContent = hint;
+      const inp = $("askInput");
+      inp.value = value;
+      box.classList.remove("hidden");
+      setTimeout(() => { inp.focus(); inp.select(); }, 0);
+      const done = (v) => {
+        box.classList.add("hidden");
+        $("askOk").onclick = $("askCancel").onclick = inp.onkeydown = null;
+        resolve(v);
+      };
+      $("askOk").onclick = () => done(inp.value);
+      $("askCancel").onclick = () => done(null);
+      inp.onkeydown = (e) => { if (e.key === "Enter") done(inp.value); if (e.key === "Escape") done(null); };
+    });
+  }
+
+  // „Variablen setzen“: weitere Variable hinzufügen.
+  HAB.hooks.addVariable = async (block) => {
+    const name = ((await askText("Name der neuen Variable", "", "Nur Buchstaben, Ziffern und _ – z. B. helligkeit")) || "").trim();
+    if (!name || block.isDisposed()) return;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) { status("Ungültiger Name – bitte nur Buchstaben, Ziffern und _ verwenden.", "warn"); return; }
+    const item = HAB.blockToItem(block);
+    if (!isObj(item.variables)) item.variables = {};
+    if (name in item.variables) return;
+    item.variables[name] = "";
+    replaceBlock(block, item);
+  };
+
+  // „Wenn“ um „sonst wenn“ erweitern: wird zur Auswahl (choose) mit gleichem Verhalten.
+  HAB.hooks.ifToChoose = (block) => {
+    if (!block || block.isDisposed()) return;
+    const item = HAB.blockToItem(block);
+    const opt = { conditions: [].concat(item.if || []), sequence: [].concat(item.then || []) };
+    const next = { choose: [opt, { conditions: [], sequence: [] }] };
+    if (item.else !== undefined && [].concat(item.else).length) next.default = [].concat(item.else);
+    for (const k of ["alias", "enabled", "continue_on_error"]) if (item[k] !== undefined) next[k] = item[k];
+    replaceBlock(block, next);
+    status("Aus „Wenn“ wurde eine Auswahl – die neue Option „sonst wenn“ ist angehängt.", "ok");
+  };
+
+  // Schritte als neues Skript auslagern; an ihrer Stelle steht dann der Aufruf.
+  HAB.hooks.extractScript = async (block, rest) => {
+    if (!block || block.isDisposed()) return;
+    const blocks = [block];
+    if (rest) for (let n = block.getNextBlock(); n; n = n.getNextBlock()) blocks.push(n);
+    const name = ((await askText("Name des neuen Skripts", "", `${blocks.length} Schritt(e) werden in das Skript verschoben.`)) || "").trim();
+    if (!name || block.isDisposed()) return;
+    const base = slugify(name);
+    const taken = new Set(itemList("script").map((a) => a.id));
+    let id = base;
+    for (let i = 2; taken.has(id) || S.hass.states["script." + id]; i++) id = `${base}_${i}`;
+    // Genutzte Auslöser-Daten und Variablen als Eingaben übergeben (ein Skript sieht sie sonst nicht).
+    const plan = HAB.planExtract(blocks.map((b) => HAB.blockToItem(b)), variableNames());
+    const from = (currentConfig() || {}).alias || "";
+    const script = { alias: name, description: from ? `Ausgelagert aus „${from}“` : "" };
+    if (Object.keys(plan.fields).length) script.fields = plan.fields;
+    // parallel: mehrere Automationen dürfen das Skript gleichzeitig aufrufen (wie vorher die eingebauten Schritte).
+    Object.assign(script, { sequence: plan.sequence, mode: "parallel", max: 10 });
+    try {
+      await apiFor("script", "POST", id, script);
+    } catch (e) { status("Skript nicht angelegt: " + errText(e), "warn"); return; }
+    const call = { action: "script." + id };
+    if (Object.keys(plan.data).length) call.data = plan.data;
+    const prev = block.previousConnection && block.previousConnection.targetConnection;
+    const after = blocks[blocks.length - 1].getNextBlock();
+    Blockly.Events.setGroup(true);
+    try {
+      if (after) after.unplug(false);
+      block.unplug(false);
+      blocks.forEach((b) => b.dispose(false));
+      const nb = Blockly.serialization.blocks.append(HAB.itemToBlockJson("action", call), S.ws);
+      if (prev) prev.connect(nb.previousConnection);
+      if (after && nb.nextConnection) nb.nextConnection.connect(after.previousConnection);
+      nb.select();
+    } finally { Blockly.Events.setGroup(false); }
+    S.xref = null;
+    const passed = Object.keys(plan.data);
+    const msg = `📜 Skript „${name}“ (script.${id}) angelegt${passed.length ? ` – übergibt ${passed.join(", ")}` : ""}. Automation noch speichern.`;
+    // Nach der normalen Statuszeile anzeigen (die kommt mit den Änderungs-Ereignissen).
+    setTimeout(() => status(plan.notes.length ? msg + " ⚠ " + plan.notes.join(" ") : msg, plan.notes.length ? "warn" : "ok"), 100);
+  };
+
   if (BLOCKLY) {
     HAB.hooks.openEditor = null;
     HAB.hooks.pickField = null;
@@ -548,7 +657,9 @@
           },
         })
       : Blockly.Themes.Classic;
+    HAB.hooks.toolboxSearch = !HAB.hooks.simple && hasSearch();
     S.ws = Blockly.inject($("ws"), {
+      comments: true,
       toolbox: HAB.buildToolbox(rootKind()),
       media: "vendor/media/",
       renderer: "zelos",
@@ -560,6 +671,7 @@
       move: { scrollbars: true, drag: true, wheel: true },
     });
     // Bei Skripten gibt es nur eine Lücke (ABLAUF); Bedingungen sind dort Schritte.
+    initPlugins();
     const rootAdd = (i, kind) => () => {
       const r = rootBlock();
       if (!r) return;
@@ -573,6 +685,9 @@
     S.ws.addChangeListener((e) => {
       if (e.type === Blockly.Events.SELECTED) { updateSide(); renderDetail(); }
       if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "collapsed" && !S.busy) saveLayoutSoon();
+      if (String(e.type).startsWith("comment_") && !S.busy && !e.blockId) saveLayoutSoon();
+      if (e.type === "backpack_change") saveBackpackSoon();
+      if (e.type === Blockly.Events.SELECTED) multiSelect(e);
       if (!e.isUiEvent && !S.busy) { updateStatus(); updateSide(); }
       // Dienst gewechselt: Block mit den Feldern des neuen Dienstes neu aufbauen.
       if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "field" && !S.busy) {
@@ -791,7 +906,7 @@
   }
 
   async function createCategory() {
-    const name = (prompt("Name der neuen Kategorie:") || "").trim();
+    const name = ((await askText("Name der neuen Kategorie (Ordner)")) || "").trim();
     if (!name) return null;
     try {
       const c = await S.hass.callWS({ type: "config/category_registry/create", scope: S.kind, name });
@@ -1064,8 +1179,8 @@
   }
   const slugify = (name) => name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "skript";
-  function newScript() {
-    const name = (prompt("Name des neuen Skripts (Funktion):", "Neues Skript") || "").trim();
+  async function newScript() {
+    const name = ((await askText("Name des neuen Skripts (Funktion)", "Neues Skript")) || "").trim();
     if (!name) return;
     if (S.kind !== "script") { if (!switchKind("script", false)) return; }
     else if (!confirmDiscard()) return;
@@ -1099,13 +1214,18 @@
     try { lay = await S.hass.callWS({ type: "blockly_automations/layout/get", key: layoutKey() }); } catch (e) { return; }
     if (!lay || id !== S.id || kind !== S.kind) return;
     collapseAll(lay.collapsed);
+    loadNotes(lay.notes);
   }
   function saveLayoutSoon() { clearTimeout(S.layoutT); S.layoutT = setTimeout(saveLayout, 800); }
   async function saveLayout() {
     if (!S.id || S.isNew || !rootBlock()) return;
     const collapsed = collapsedPaths();
+    const notes = saveNotes();
+    const layout = {};
+    if (collapsed.length) layout.collapsed = collapsed;
+    if (notes.length) layout.notes = notes;
     try {
-      await S.hass.callWS({ type: "blockly_automations/layout/set", key: layoutKey(), layout: collapsed.length ? { collapsed } : null });
+      await S.hass.callWS({ type: "blockly_automations/layout/set", key: layoutKey(), layout: Object.keys(layout).length ? layout : null });
     } catch (e) {
       if (!S.layoutWarned) { S.layoutWarned = true; console.warn("[Blockly Automations] Darstellung nicht gespeichert (HA-Neustart nach Update nötig?)", e); }
     }
@@ -1282,6 +1402,17 @@
       if (st) html.push(`<div class="hint">Auslöser-Daten:</div><pre>${esc(shortJson(st.changed_variables || st))}</pre>`);
     }
     box.innerHTML = html.join("");
+    // YAML des Bausteins (wie im HA-Editor), nur zum Lesen.
+    try {
+      const yi = isRoot ? currentConfig() : HAB.blockToItem(b);
+      const det = document.createElement("details");
+      det.className = "yaml";
+      det.open = store("haBlockly.yaml") === "1";
+      det.innerHTML = "<summary>YAML</summary><pre></pre>";
+      det.querySelector("pre").textContent = HAB.toYaml(yi);
+      det.addEventListener("toggle", () => store("haBlockly.yaml", det.open ? "1" : "0"));
+      box.appendChild(det);
+    } catch (e) { /* optional */ }
     // Template-Vorschau (live, über render_template)
     let item = null;
     try { item = HAB.blockToItem(b); } catch (e) { item = null; }
@@ -1506,6 +1637,136 @@
   $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
   if (store("haBlockly.insp") === "1" && window.innerWidth >= 800) $("insp").classList.remove("hidden");
 
+  // ---------- Plugins und Komfort ----------
+  // Deutsche Texte für die Suche im Werkzeugkasten.
+  Object.assign(Blockly.Msg, {
+    TOOLBOX_SEARCH_PLACEHOLDER: "Bausteine suchen …", TOOLBOX_SEARCH_PROMPT: "Suchbegriff eingeben",
+    TOOLBOX_SEARCH_NO_RESULTS: "Keine Bausteine gefunden", TOOLBOX_SEARCH_RESULT_COUNT: "%1 Bausteine gefunden", TOOLBOX_SEARCH_RESULT_COUNT_ONE: "1 Baustein gefunden",
+  });
+  const hasSearch = () => { try { return !!Blockly.registry.getClass(Blockly.registry.Type.TOOLBOX_ITEM, "search"); } catch (e) { return false; } };
+  function initPlugins() {
+    // Mini-Karte (große Automationen) – nur auf breiten Bildschirmen.
+    // Kopieren/Einfügen zwischen Automationen (und Browser-Tabs).
+    try { if (window.CrossTabCopyPaste && !window.__habCrossTab) { new window.CrossTabCopyPaste().init({ contextMenu: true, shortcut: true }); window.__habCrossTab = true; } } catch (e) { console.warn("Kopieren", e); }
+    // Rucksack: Lieblings-Bausteine für alle Automationen (in HA gespeichert).
+    try {
+      if (window.Backpack) {
+        S.backpack = new window.Backpack(S.ws, {
+          allowEmptyBackpackOpen: true, useFilledBackpackImage: true, skipSerializerRegistration: true,
+          contextMenu: { emptyBackpack: true, removeFromBackpack: true, copyToBackpack: true, copyAllToBackpack: false, pasteAllToBackpack: false, disablePreconditionChecks: false },
+        });
+        S.backpack.init();
+        S.hass.callWS({ type: "blockly_automations/layout/get", key: "__backpack__" }).then((b) => {
+          if (b && Array.isArray(b.contents)) { S.bpLoading = true; S.backpack.setContents(b.contents); S.bpLoading = false; }
+        }).catch(() => {});
+      }
+    } catch (e) { console.warn("Rucksack", e); }
+    // Notiz im Arbeitsbereich (Rechtsklick auf freie Fläche).
+    try {
+      const reg = Blockly.ContextMenuRegistry.registry;
+      if (!reg.getItem("habNote")) reg.register({
+        id: "habNote", weight: 1, scopeType: Blockly.ContextMenuRegistry.ScopeType.WORKSPACE,
+        displayText: () => "🗒 Notiz hier hinzufügen", preconditionFn: () => (S.id ? "enabled" : "hidden"),
+        callback: (scope, e) => {
+          const ws = scope.workspace;
+          const m = ws.getMetricsManager().getViewMetrics(true);
+          Blockly.serialization.workspaceComments.append({ text: "Notiz", x: m.left + 40, y: m.top + 40, width: 200, height: 100 }, ws);
+          saveLayoutSoon();
+        },
+      });
+      // Mehrfachauswahl: Shift+Klick sammelt Bausteine, Rechtsklick wirkt auf alle.
+      const multi = (id, text, fn) => {
+        if (reg.getItem(id)) return;
+        reg.register({
+          id, weight: -10, scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+          displayText: () => `${text} (${S.multi.size} markiert)`,
+          preconditionFn: (scope) => (S.multi.size > 1 && S.multi.has(scope.block.id) ? "enabled" : "hidden"),
+          callback: () => { Blockly.Events.setGroup(true); try { fn(multiBlocks()); } finally { Blockly.Events.setGroup(false); } clearMulti(); },
+        });
+      };
+      const MAN = (Blockly.constants && Blockly.constants.MANUALLY_DISABLED) || "MANUALLY_DISABLED";
+      multi("habMultiOff", "⏸ Alle deaktivieren", (bs) => bs.forEach((b) => !HAB.ROOTS.has(b.haKind_) && b.setDisabledReason(true, MAN)));
+      multi("habMultiOn", "▶ Alle aktivieren", (bs) => bs.forEach((b) => b.setDisabledReason(false, MAN)));
+      multi("habMultiCollapse", "▸ Alle einklappen", (bs) => bs.forEach((b) => b.setCollapsed(true)));
+      multi("habMultiDelete", "🗑 Alle löschen", (bs) => bs.forEach((b) => !HAB.ROOTS.has(b.haKind_) && !b.isDisposed() && b.dispose(true)));
+      multi("habMultiBackpack", "🎒 Alle in den Rucksack", (bs) => { if (S.backpack) bs.forEach((b) => S.backpack.addBlock(b)); });
+    } catch (e) { console.warn("Kontextmenü", e); }
+  }
+  // Rucksack in HA speichern (für alle Geräte).
+  function saveBackpackSoon() {
+    if (S.bpLoading || !S.backpack) return;
+    clearTimeout(S.bpT);
+    S.bpT = setTimeout(() => {
+      S.hass.callWS({ type: "blockly_automations/layout/set", key: "__backpack__", layout: { contents: S.backpack.getContents() } }).catch(() => {});
+    }, 600);
+  }
+  // Notizen (Workspace-Kommentare) gehören zur Darstellung, nicht zur Automation.
+  function saveNotes() {
+    try { return S.ws.getTopComments(false).map((c) => Blockly.serialization.workspaceComments.save(c)); } catch (e) { return []; }
+  }
+  function loadNotes(notes) {
+    if (!Array.isArray(notes) || !notes.length) return;
+    S.busy = true;
+    try { for (const n of notes) Blockly.serialization.workspaceComments.append(n, S.ws); } catch (e) { console.warn("Notizen", e); } finally { S.busy = false; }
+  }
+  // Mehrfachauswahl
+  S.multi = new Set();
+  document.addEventListener("pointerdown", (e) => { S.shift = e.shiftKey; }, true);
+  const multiBlocks = () => [...S.multi].map((id) => S.ws.getBlockById(id)).filter((b) => b && !b.isDisposed());
+  function paintMulti() {
+    for (const b of S.ws.getAllBlocks(false)) { const g = b.getSvgRoot && b.getSvgRoot(); if (g) g.classList.toggle("hab-multi", S.multi.has(b.id)); }
+  }
+  function clearMulti() { S.multi.clear(); paintMulti(); }
+  function multiSelect(e) {
+    if (!e.newElementId) return;
+    const prev = S.lastSel;
+    S.lastSel = e.newElementId;
+    if (S.shift) {
+      if (!S.multi.size && prev && prev !== e.newElementId && S.ws.getBlockById(prev)) S.multi.add(prev);
+      if (S.multi.has(e.newElementId) && S.multi.size > 1) S.multi.delete(e.newElementId); else S.multi.add(e.newElementId);
+      status(`${S.multi.size} Bausteine markiert – Rechtsklick für Aktionen, Klick ohne Shift hebt auf`, "ok");
+    } else if (S.multi.size) S.multi.clear();
+    paintMulti();
+  }
+
+  // Suche im Arbeitsbereich (Strg+F): findet Bausteine nach ihrem Text.
+  function wsFind(q, dir = 1) {
+    const box = $("find");
+    const qs = q.trim().toLowerCase();
+    if (!qs || !S.ws) { $("findInfo").textContent = ""; return; }
+    const hits = S.ws.getAllBlocks(true).filter((b) => {
+      let t = "";
+      try { t = b.toString(); } catch (e) { t = ""; }
+      const raw = HAB.isObj(b.raw_) ? JSON.stringify(b.raw_) : "";
+      return (t + " " + raw).toLowerCase().includes(qs);
+    });
+    if (!hits.length) { $("findInfo").textContent = "keine Treffer"; return; }
+    S.findIdx = ((S.findIdx || 0) + dir + hits.length) % hits.length;
+    if (S.findQ !== qs) { S.findQ = qs; S.findIdx = 0; }
+    const b = hits[S.findIdx];
+    for (let p = b.getParent(); p; p = p.getParent()) if (p.isCollapsed()) p.setCollapsed(false);
+    b.select();
+    try { S.ws.centerOnBlock(b.id); } catch (e) { /* optional */ }
+    $("findInfo").textContent = `${S.findIdx + 1} / ${hits.length}`;
+    box.classList.remove("hidden");
+  }
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && S.ws) {
+      e.preventDefault();
+      $("find").classList.remove("hidden");
+      $("findInput").focus();
+      $("findInput").select();
+    }
+  });
+  $("findInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); wsFind($("findInput").value, e.shiftKey ? -1 : 1); }
+    if (e.key === "Escape") $("find").classList.add("hidden");
+  });
+  $("findInput").addEventListener("input", () => { S.findIdx = -1; wsFind($("findInput").value, 1); });
+  $("findClose").addEventListener("click", () => $("find").classList.add("hidden"));
+  $("fitBtn").addEventListener("click", () => { if (S.ws) S.ws.zoomToFit(); });
+  $("findBtn").addEventListener("click", () => { $("find").classList.toggle("hidden"); if (!$("find").classList.contains("hidden")) $("findInput").focus(); });
+
   // ---------- Anbindung ----------
   window.haBlockly = {
     setHass(hass) {
@@ -1538,6 +1799,7 @@
       liveTick();
     },
     selfTest,
+    get ws() { return S.ws; },
     currentConfig: () => currentConfig(),
     load,
   };
@@ -1567,6 +1829,7 @@
     document.body.classList.toggle("expert", on);
     HAB.hooks.simple = !on && !BLOCKLY;
     HAB.hooks.expert = on;
+    HAB.hooks.toolboxSearch = !HAB.hooks.simple && hasSearch();
     if (!on) $("side").classList.add("hidden");
     if (!S.ws) return;
     S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
