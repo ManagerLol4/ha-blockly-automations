@@ -30,7 +30,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
-from .const import CONF_UI_MODE, DOMAIN, PANEL_ICON, PANEL_TITLE, PANEL_URL, STATIC_URL, UI_MODE_HA, UI_MODES
+from .const import BLOCK_SET_NATIVE, BLOCK_SETS, CONF_BLOCK_SET, CONF_UI_MODE, DOMAIN, PANEL_ICON, PANEL_TITLE, PANEL_URL, STATIC_URL, UI_MODE_HA, UI_MODES
 
 BASE_DIR = Path(__file__).parent
 WWW_DIR = BASE_DIR / "www"
@@ -119,6 +119,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ui_mode = entry.options.get(CONF_UI_MODE, UI_MODE_HA)
     if ui_mode not in UI_MODES:
         ui_mode = UI_MODE_HA
+    block_set = entry.options.get(CONF_BLOCK_SET, BLOCK_SET_NATIVE)
+    if block_set not in BLOCK_SETS:
+        block_set = BLOCK_SET_NATIVE
     await panel_custom.async_register_panel(
         hass,
         frontend_url_path=PANEL_URL,
@@ -126,7 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
         module_url=f"{STATIC_URL}/panel.js?v={version}",
-        config={"static_url": STATIC_URL, "version": version, "ui_mode": ui_mode},
+        config={"static_url": STATIC_URL, "version": version, "ui_mode": ui_mode, "block_set": block_set},
         require_admin=True,
     )
 

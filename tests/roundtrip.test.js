@@ -403,6 +403,146 @@ ok("dienst-titel", () => {
   } finally { HAB.hooks.serviceName = prev; }
 });
 
+// 20c) Version B: globale Variablen sind normale Dienstaufrufe, verlustfrei und mit Wert-Bausteinen.
+ok("version-b-variablen", () => {
+  HAB.hooks.extended = true;
+  try {
+    const cfgs = [
+      { action: "input_number.set_value", target: { entity_id: "input_number.helligkeit" }, data: { value: 80 } },
+      { action: "input_text.set_value", target: { entity_id: "input_text.gruss" }, data: { value: "Hallo" } },
+      { alias: "an", action: "input_boolean.turn_off", target: { entity_id: "input_boolean.urlaub" } },
+      { action: "input_number.set_value", target: { entity_id: "input_number.h" }, data: { value: HAB.HAV.compile({ k: "math", f: { op: "+" }, a: [{ k: "gvar", f: { e: "input_number.h" } }, { k: "num", f: { n: 1 } }] }) } },
+    ];
+    for (const c of cfgs) {
+      const b = toBlocks(c, "action");
+      assert.ok(b.getFieldValue("TITLE").includes("-Variable"), JSON.stringify(c));
+      assert.deepStrictEqual(HAB.blockToItem(b), c);
+    }
+    // Wert-Baustein steckt wieder als Baustein im Feld
+    const b = toBlocks(cfgs[3], "action");
+    assert.ok(b.inputList.some((i) => i.connection && i.connection.targetBlock() && i.connection.targetBlock().type === "ha_v_math"));
+    assert.strictEqual(HAB.HAV.expr({ k: "gvar", f: { e: "input_boolean.x" } }), "is_state('input_boolean.x', 'on')");
+    // Wahr/falsch umstellen ändert nur den Dienst
+    const bb = toBlocks(cfgs[2], "action");
+    const m = bb.fieldMap_.find((x) => x.path === "action");
+    bb.setFieldValue("input_boolean.turn_on", m.name);
+    assert.strictEqual(HAB.blockToItem(bb).action, "input_boolean.turn_on");
+    // Mit weiteren Angaben bleibt es ein normaler Dienst-Baustein
+    assert.ok(!toBlocks({ action: "input_number.set_value", target: { entity_id: "input_number.a", area_id: "x" }, data: { value: 1 } }, "action").getFieldValue("TITLE").includes("Variable"));
+    // Werkzeugkasten Version B: Knopf + Bausteine, alles verlustfrei
+    const box = HAB.buildToolbox("root");
+    const vars = box.contents.find((c) => c.name === "Variablen");
+    assert.ok(vars.contents.some((x) => x.callbackKey === "newGlobalVar"));
+    for (const item of vars.contents.filter((x) => x.kind === "block" && x.extraState)) {
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(item.extraState.raw, item.type.slice(3))), item.extraState.raw);
+    }
+  } finally { HAB.hooks.extended = false; }
+  // Version A: derselbe Aufruf ist ein normaler Dienst-Baustein, ebenfalls verlustfrei
+  const c = { action: "input_number.set_value", target: { entity_id: "input_number.helligkeit" }, data: { value: 80 } };
+  const b = toBlocks(c, "action");
+  assert.ok(!b.getFieldValue("TITLE").includes("Variable"));
+  assert.deepStrictEqual(HAB.blockToItem(b), c);
+});
+
+// 20d) Version B: Funktionen (Skript mit Rückgabe), Aufruf mit Ergebnis.
+ok("version-b-funktionen", () => {
+  HAB.hooks.extended = true;
+  try {
+    const HAV = HAB.HAV;
+    const ret = HAB.RETURN(HAV.compile({ k: "math", f: { op: "*" }, a: [{ k: "var", f: { v: "stufe" } }, { k: "num", f: { n: 10 } }] }));
+    const fn = { alias: "Helligkeit", fields: { stufe: { name: "stufe", selector: { text: {} } } }, sequence: [{ delay: 1 }, ret], mode: "parallel" };
+    const r = toBlocks(fn, "script");
+    assert.deepStrictEqual(HAB.blockToItem(r), fn);
+    const rb = toBlocks(ret, "action");
+    assert.ok(rb.getFieldValue("TITLE").includes("gib zurück"));
+    assert.ok(rb.inputList.some((i) => i.connection && i.connection.targetBlock() && i.connection.targetBlock().type === "ha_v_math"));
+    // Wert ändern bleibt in der Form
+    const rb2 = toBlocks(HAB.RETURN(5), "action");
+    const m = rb2.fieldMap_.find((x) => x.path.endsWith("wert"));
+    rb2.setFieldValue("7", m.name);
+    assert.deepStrictEqual(HAB.blockToItem(rb2), HAB.RETURN(7));
+    // Leere Funktion aus dem Knopf: verlustfrei
+    const nf = HAB.NEW_FUNCTION("Test", ["raum", "stufe"]);
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(nf, "script")), nf);
+    // Aufruf: Titel „Funktion“, Ergebnis-Feld immer da
+    const call = { action: "script.helligkeit", data: { stufe: 3 }, response_variable: "ergebnis" };
+    const cb = toBlocks(call, "action");
+    assert.ok(cb.getFieldValue("TITLE").startsWith("ƒ Funktion"));
+    assert.deepStrictEqual(HAB.blockToItem(cb), call);
+    assert.strictEqual(HAV.expr({ k: "fres", f: { v: "ergebnis" } }), "ergebnis.wert");
+    // Version A: dieselbe Folge ist eine normale Folge
+    HAB.hooks.extended = false;
+    assert.ok(!toBlocks(ret, "action").getFieldValue("TITLE").includes("gib zurück"));
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(fn, "script")), fn);
+    HAB.hooks.extended = true;
+    // Werkzeugkasten: alle Bausteine verlustfrei
+    const walk = (c) => (c.contents || []).flatMap((x) => (x.kind === "category" ? walk(x) : [x]));
+    const box = HAB.buildToolbox("root");
+    assert.ok(walk(box).some((x) => x.callbackKey === "newFunction"));
+    for (const item of walk(box).filter((x) => x.kind === "block" && x.extraState)) {
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(item.extraState.raw, item.type.slice(3))), item.extraState.raw);
+    }
+  } finally { HAB.hooks.extended = false; }
+});
+
+// 20e) Version B: Timer und Log.
+ok("version-b-timer-log", () => {
+  HAB.hooks.extended = true;
+  try {
+    const auto = { alias: "t", triggers: [{ ...HAB.TIMER_FINISHED("timer.flur"), id: "ab" }], actions: [
+      { action: "timer.start", target: { entity_id: "timer.flur" }, data: { duration: "00:02:00" } },
+      { action: "system_log.write", data: { message: "Hallo", level: "info" } },
+      { action: "system_log.write", data: { message: HAB.HAV.compile({ k: "join", a: [{ k: "txt", f: { s: "T: " } }, { k: "state", f: { e: "sensor.t" } }] }) } },
+    ] };
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(auto)), auto);
+    assert.ok(toBlocks(auto.triggers[0], "trigger").getFieldValue("TITLE").includes("Timer abgelaufen"));
+    const lb = toBlocks(auto.actions[1], "action");
+    assert.ok(lb.getFieldValue("TITLE").includes("Log"));
+    const m = lb.fieldMap_.find((x) => x.path === "data.level");
+    lb.setFieldValue("error", m.name);
+    assert.strictEqual(HAB.blockToItem(lb).data.level, "error");
+    assert.ok(HAB.serviceTitle("timer.start").startsWith("⏲️"));
+    // Ereignis mit anderen Daten bleibt ein normales Ereignis
+    assert.ok(!toBlocks({ trigger: "event", event_type: "timer.finished", event_data: { x: 1 } }, "trigger").getFieldValue("TITLE").includes("Timer"));
+    HAB.hooks.extended = false;
+    assert.ok(!toBlocks(auto.triggers[0], "trigger").getFieldValue("TITLE").includes("Timer abgelaufen"));
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(auto)), auto);
+  } finally { HAB.hooks.extended = false; }
+});
+
+// 20f) Version B: „nach Typ wählen“ kennt die neuen Bausteine; Parameter lesbar.
+ok("version-b-katalog-parameter", () => {
+  HAB.hooks.extended = true;
+  try {
+    const svcs = [["script.helligkeit", "Helligkeit"], ["script.turn_on", ""], ["light.turn_on", ""]];
+    const acts = HAB.typeCatalog("action", svcs).flatMap((g) => g.items);
+    const labels = acts.map((i) => i.label);
+    for (const l of ["🧮 setze Zahl-Variable", "↩️ gib zurück", "⏲️ Timer starten", "📝 schreibe ins Log", "ƒ Helligkeit"]) assert.ok(labels.includes(l), l);
+    assert.ok(!labels.includes("ƒ script.turn_on"));
+    const trigs = HAB.typeCatalog("trigger").flatMap((g) => g.items).map((i) => i.label);
+    assert.ok(trigs.includes("⏲️ Timer abgelaufen"));
+    // Was der Dialog einsetzt (convertType), wird als passender Baustein erkannt und bleibt verlustfrei.
+    for (const i of acts.filter((x) => /Variable|gib zurück|Timer|Log|^ƒ/.test(x.label))) {
+      const item = HAB.convertType({}, i.item);
+      const b = toBlocks(item, "action");
+      assert.deepStrictEqual(HAB.blockToItem(b), item, i.label);
+      assert.ok(!b.getFieldValue("TITLE").includes("Dienst aufrufen"), i.label);
+    }
+    // Parameter: als „stufe, raum“ anzeigen, ändern ohne bestehende Angaben zu verlieren
+    const fn = HAB.NEW_FUNCTION("F", ["stufe"]);
+    fn.fields.stufe.selector = { number: { min: 0, max: 10 } };
+    const r = toBlocks(fn, "script");
+    const m = r.fieldMap_.find((x) => x.path === "fields");
+    assert.strictEqual(r.getFieldValue(m.name), "stufe");
+    assert.deepStrictEqual(HAB.blockToItem(r), fn);
+    r.setFieldValue("stufe, Raum Name", m.name);
+    const out = HAB.blockToItem(r);
+    assert.deepStrictEqual(Object.keys(out.fields), ["stufe", "raum_name"]);
+    assert.deepStrictEqual(out.fields.stufe.selector, { number: { min: 0, max: 10 } });
+  } finally { HAB.hooks.extended = false; }
+  assert.ok(!HAB.typeCatalog("action", []).some((g) => g.group === "Variablen"));
+});
+
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
 ok("wert-bausteine", () => {
   const HAV = HAB.HAV;

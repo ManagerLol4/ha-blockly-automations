@@ -44,6 +44,31 @@ Editor) wählst du die **Bedienung**:
 
 Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
 
+### Version A oder B (Einstellung „Bausteine“)
+
+- **Version A (Standard):** Bausteine zeigen genau das, was in der HA-Automation steht.
+- **Version B:** zusätzlich Bausteine wie bei ioBroker:
+  - **Globale Variablen:** Unter
+    *Variablen → ＋ Neue globale Variable anlegen …* legt Blockly einen Helfer an (Zahl, Text oder
+    Wahr/Falsch). Er behält seinen Wert auch nach einem Neustart. Dazu gibt es die Bausteine
+    *setze Zahl-/Text-/Wahr/Falsch-Variable … auf …* und *globale Variable* zum Lesen.
+  - **Funktionen mit Rückgabewert** (Kategorie *Skripte (Funktionen)*): *＋ Neue Funktion anlegen …* fragt
+    Name und Parameter und legt ein Skript an (Eingaben = Parameter, Modus *parallel*). Mit *↩️ gib zurück …*
+    liefert die Funktion einen Wert. Beim Aufruf (*ƒ Funktion: …*) landet das Ergebnis in einer Variable,
+    gelesen wird es mit *Ergebnis von …*. In HA ist das ein Skript mit `fields`, `stop` +
+    `response_variable` und ein Aufruf mit `response_variable` (Ergebnis unter `ergebnis.wert`).
+  - **Timer** (Kategorie *Zeit*): *＋ Neuen Timer anlegen …* legt einen Timer-Helfer an. Dazu gibt es
+    *Timer starten/abbrechen* und den Auslöser *⏲️ Timer abgelaufen* (Ereignis `timer.finished`).
+    So baut man ein „Licht nach 5 Minuten aus“, das auch einen Neustart übersteht.
+  - **Log** (Kategorie *Text*): *📝 schreibe ins Log …* mit Stufe (Info, Warnung, Fehler …) –
+    erscheint unter *Einstellungen → System → Protokolle* (`system_log.write`).
+
+Alle diese Bausteine gibt es in Version B auch im Dialog *＋ … nach Typ wählen*. Die Parameter einer Funktion
+stehen als lesbare Liste im Skript-Kopf (*Parameter: stufe, raum*).
+
+Auch Version B speichert nur normale HA-Automationen und Helfer. Beim Zurückwechseln auf A läuft alles
+weiter, die Bausteine erscheinen dann als normale Dienstaufrufe (z. B. *Zahlen-Helfer Wert setzen*).
+
 ### Im Blockly-Modus zusätzlich
 
 - **Werte & Logik:** Bausteine wie *Zustand von …*, *Zahl von …*, *Attribut*, *Auslöser: neuer Zustand*,

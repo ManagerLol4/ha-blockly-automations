@@ -408,9 +408,12 @@
   const CFG = (() => { try { return parent.__haBlocklyConfig || {}; } catch (e) { return {}; } })();
   const UI = new URLSearchParams(location.search).get("ui") || CFG.ui_mode || "ha";
   const BLOCKLY = UI === "blockly";
+  // Version B: zusätzlich Bausteine wie bei ioBroker (globale Variablen …). Braucht die ausführliche Ansicht.
+  const EXTENDED = (new URLSearchParams(location.search).get("bs") || CFG.block_set) === "extended";
   HAB.hooks.blockly = BLOCKLY;
+  HAB.hooks.extended = EXTENDED;
   HAB.hooks.expert = isExpert();
-  HAB.hooks.simple = !isExpert() && !BLOCKLY;
+  HAB.hooks.simple = !isExpert() && !BLOCKLY && !EXTENDED;
   document.body.classList.toggle("expert", isExpert());
   document.body.classList.toggle("blocklyMode", BLOCKLY);
 
@@ -551,6 +554,33 @@
       if (isObj(item) && isObj(item.repeat)) { out.add("repeat.index"); if ("for_each" in item.repeat) out.add("repeat.item"); }
     });
     return [...out];
+  }
+
+  // Version B: globale Variable = Helfer in HA (Zahl, Text, Wahr/Falsch). Danach liegt ein „setze“-Baustein bereit.
+  async function newGlobalVar() {
+    const type = await askChoice("Neue globale Variable",
+      "Was soll die Variable speichern? Blockly legt dafür einen Helfer in Home Assistant an. Er behält seinen Wert auch nach einem Neustart.",
+      [["Zahl", "input_number", true], ["Text", "input_text"], ["Wahr/Falsch", "input_boolean"], ["Abbrechen", null]]);
+    if (!type) return;
+    const name = await askText("Name der Variable", "", "z. B. „Helligkeit Wohnzimmer“ – so heißt auch der Helfer in Home Assistant.");
+    if (!name || !name.trim()) return;
+    const msg = { type: `${type}/create`, name: name.trim(), icon: "mdi:variable" };
+    if (type === "input_number") Object.assign(msg, { min: -1000000, max: 1000000, step: 0.01, mode: "box" });
+    if (type === "input_text") Object.assign(msg, { min: 0, max: 255 });
+    let res;
+    try { res = await S.hass.callWS(msg); } catch (e) { status("Variable konnte nicht angelegt werden: " + errText(e), "err"); return; }
+    const eid = `${type}.${(res && res.id) || name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+    const raw = type === "input_boolean" ? { action: "input_boolean.turn_on", target: { entity_id: eid } }
+      : { action: `${type}.set_value`, target: { entity_id: eid }, data: { value: type === "input_number" ? 0 : "" } };
+    try {
+      const json = HAB.itemToBlockJson("action", raw);
+      const m = S.ws.getMetricsManager().getViewMetrics(true);
+      json.x = m.left + 40; json.y = m.top + 40;
+      const b = Blockly.serialization.blocks.append(json, S.ws);
+      b.select && b.select();
+    } catch (e) { /* Baustein ist optional */ }
+    setTimeout(() => S.ws && S.ws.updateToolbox(HAB.buildToolbox(rootKind())), 500);
+    status(`Variable „${name.trim()}“ angelegt (${eid}). Den Baustein oben links einstecken.`, "ok");
   }
 
   // Eigenes Eingabefenster (statt prompt(), das in der HA-App oft nicht erscheint).
@@ -739,6 +769,9 @@
       addFromHA(r, "L" + i, kind);
     };
     S.ws.registerButtonCallback("newScript", () => newScript());
+    S.ws.registerButtonCallback("newGlobalVar", () => newGlobalVar());
+    S.ws.registerButtonCallback("newFunction", () => newFunction());
+    S.ws.registerButtonCallback("newTimer", () => newTimer());
     S.ws.registerButtonCallback("addTrigger", rootAdd(0, "trigger"));
     S.ws.registerButtonCallback("addCondition", rootAdd(1, "condition"));
     S.ws.registerButtonCallback("addAction", rootAdd(2, "action"));
@@ -1274,6 +1307,50 @@
   }
   const slugify = (name) => name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "skript";
+  // Version B: Timer = Helfer „timer“. Danach liegen „Timer starten“ und „Timer abgelaufen“ bereit.
+  async function newTimer() {
+    const name = ((await askText("Name des neuen Timers", "", "z. B. „Licht Flur aus“")) || "").trim();
+    if (!name) return;
+    let dur = await askText("Dauer", "00:05:00", "Stunden:Minuten:Sekunden – beim Starten lässt sie sich auch einzeln angeben.");
+    if (dur === null) return;
+    dur = dur.trim() || "00:05:00";
+    if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(dur)) { status("Dauer bitte als HH:MM:SS angeben, z. B. 00:05:00", "warn"); return; }
+    let res;
+    try { res = await S.hass.callWS({ type: "timer/create", name, duration: dur, restore: true, icon: "mdi:timer-outline" }); }
+    catch (e) { status("Timer konnte nicht angelegt werden: " + errText(e), "err"); return; }
+    const eid = `timer.${(res && res.id) || slugify(name)}`;
+    try {
+      const m = S.ws.getMetricsManager().getViewMetrics(true);
+      const a = HAB.itemToBlockJson("action", { action: "timer.start", target: { entity_id: eid } });
+      a.x = m.left + 40; a.y = m.top + 40;
+      Blockly.serialization.blocks.append(a, S.ws);
+      if (S.kind === "automation") {
+        const t = HAB.itemToBlockJson("trigger", HAB.TIMER_FINISHED(eid));
+        t.x = m.left + 40; t.y = m.top + 200;
+        Blockly.serialization.blocks.append(t, S.ws);
+      }
+    } catch (e) { /* Bausteine sind optional */ }
+    setTimeout(() => S.ws && S.ws.updateToolbox(HAB.buildToolbox(rootKind())), 500);
+    status(`Timer „${name}“ angelegt (${eid}). „Timer starten“ und „Timer abgelaufen“ liegen oben links bereit.`, "ok");
+  }
+
+  // Version B: Funktion = Skript mit Parametern (fields) und „gib zurück“. Läuft parallel, damit mehrere Aufrufe gleichzeitig gehen.
+  async function newFunction() {
+    const name = ((await askText("Name der neuen Funktion", "", "z. B. „Helligkeit berechnen“")) || "").trim();
+    if (!name) return;
+    const ps = await askText("Parameter (Eingaben)", "", "Namen mit Komma trennen, z. B. „raum, stufe“. Leer lassen für keine.");
+    if (ps === null) return;
+    const params = [...new Set(ps.split(",").map((p) => slugify(p.trim())).filter(Boolean))];
+    if (S.kind !== "script") { if (!switchKind("script", false)) return; }
+    else if (!confirmDiscard()) return;
+    const base = slugify(name);
+    const taken = new Set(itemList("script").map((a) => a.id));
+    let id = base;
+    for (let i = 2; taken.has(id) || S.hass.states["script." + id]; i++) id = `${base}_${i}`;
+    newItem(() => HAB.NEW_FUNCTION(name, params), id);
+    status(`ƒ Neue Funktion „${name}“ (script.${id}) – Schritte vor „gib zurück“ einfügen, dann speichern`, "ok");
+  }
+
   async function newScript() {
     const name = ((await askText("Name des neuen Skripts (Funktion)", "Neues Skript")) || "").trim();
     if (!name) return;
@@ -2254,7 +2331,7 @@
     const on = !isExpert();
     store("haBlockly.expert", on ? "1" : "0");
     document.body.classList.toggle("expert", on);
-    HAB.hooks.simple = !on && !BLOCKLY;
+    HAB.hooks.simple = !on && !BLOCKLY && !EXTENDED;
     HAB.hooks.expert = on;
     HAB.hooks.toolboxSearch = !HAB.hooks.simple && hasSearch();
     if (!on) $("side").classList.add("hidden");

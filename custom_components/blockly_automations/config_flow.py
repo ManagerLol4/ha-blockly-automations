@@ -14,7 +14,16 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.core import callback
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
 
-from .const import CONF_UI_MODE, DOMAIN, ENTRY_TITLE, UI_MODE_HA, UI_MODES
+from .const import (
+    BLOCK_SET_NATIVE,
+    BLOCK_SETS,
+    CONF_BLOCK_SET,
+    CONF_UI_MODE,
+    DOMAIN,
+    ENTRY_TITLE,
+    UI_MODE_HA,
+    UI_MODES,
+)
 
 
 class BlocklyAutomationsConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -46,6 +55,7 @@ class BlocklyAutomationsOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(data=user_input)
         current = self.config_entry.options.get(CONF_UI_MODE, UI_MODE_HA)
+        block_set = self.config_entry.options.get(CONF_BLOCK_SET, BLOCK_SET_NATIVE)
         schema = vol.Schema(
             {
                 vol.Required(CONF_UI_MODE, default=current): SelectSelector(
@@ -54,7 +64,14 @@ class BlocklyAutomationsOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.LIST,
                         translation_key=CONF_UI_MODE,
                     )
-                )
+                ),
+                vol.Required(CONF_BLOCK_SET, default=block_set): SelectSelector(
+                    SelectSelectorConfig(
+                        options=BLOCK_SETS,
+                        mode=SelectSelectorMode.LIST,
+                        translation_key=CONF_BLOCK_SET,
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

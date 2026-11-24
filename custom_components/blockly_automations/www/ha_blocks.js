@@ -19,7 +19,7 @@
     if (!path) return obj;
     let cur = obj;
     for (const k of path.split(".")) {
-      if (!isObj(cur)) return undefined;
+      if (!isObj(cur) && !Array.isArray(cur)) return undefined;
       cur = cur[k];
     }
     return cur;
@@ -28,7 +28,7 @@
     const keys = path.split(".");
     let cur = obj;
     for (let i = 0; i < keys.length - 1; i++) {
-      if (!isObj(cur[keys[i]])) cur[keys[i]] = {};
+      if (!isObj(cur[keys[i]]) && !Array.isArray(cur[keys[i]])) cur[keys[i]] = {};
       cur = cur[keys[i]];
     }
     cur[keys[keys.length - 1]] = val;
@@ -103,8 +103,8 @@
   };
 
   // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
-  const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count)$/;
-  const valuesOn = () => !!(hooks.blockly || hooks.expert);
+  const VALUE_PATH = /^(data\.|variables\.|event_data\.)|^(value_template|wait_template|repeat\.count|sequence\.0\.variables\.funktion_ergebnis\.wert)$/;
+  const valuesOn = () => !!(hooks.blockly || hooks.expert || hooks.extended);
   const valueSlot = (f) => valuesOn() && !f.row && !f.dur && ["text", "template", "number"].includes(f.type) && VALUE_PATH.test(f.path);
 
   // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
@@ -143,7 +143,7 @@
   }
 
   // ---------- Farben ----------
-  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290, scene: 330 };
+  const C = { trigger: 30, condition: 210, action: 140, flow: 260, generic: "#8a8a8a", root: 50, script: 290, scene: 330, gvar: 330 };
   const NONE = "__ha_none__";
   const ADD_LABEL = { trigger: "＋ Auslöser hinzufügen", condition: "＋ Bedingung hinzufügen", action: "＋ Aktion hinzufügen", option: "＋ Option hinzufügen", sceneent: "＋ Entität hinzufügen" };
   const GEAR = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
@@ -185,6 +185,7 @@
     const mk = (title, fields, colour = C.trigger, extra = {}) => ({
       title, colour, fields: [...fields, F("id", "ID", { adv: true })], lists: [], ...extra,
     });
+    if (isTimerFinished(t)) return mk("⏲️ Timer abgelaufen", [F("event_data.entity_id", "", { type: "entity", domains: ["timer"] })]);
     switch (p) {
       case "state":
         return mk("🔁 Zustand ändert sich", [
@@ -370,6 +371,7 @@
       return mk("🔁 Wiederholen", fields, lists, C.flow);
     }
     if ("parallel" in a) return mk("⏸ Parallel ausführen", [], [L("parallel", "", "action")], C.flow);
+    if (isReturn(a)) return mk("↩️ gib zurück", [F(RET_PATH, "", { type: "text" })], [], C.script);
     if ("sequence" in a) return mk("📜 Folge", [], [L("sequence", "", "action")], C.flow);
     if ("wait_for_trigger" in a)
       return mk("⏳ Warten auf Auslöser", [...duration(a, "timeout", "höchstens", "present"), P("continue_on_timeout", "danach weiter", { type: "bool" })],
@@ -380,6 +382,17 @@
       const d = a.delay;
       if (isObj(d)) return mk("⏱️ Warten", duration(a, "delay", ""), [], C.flow);
       return mk("⏱️ Warten", [F("delay", "", { numeric: typeof d === "number" })], [], C.flow);
+    }
+    // Version B: „schreibe ins Log“ = system_log.write
+    if (isLogWrite(a)) return mk("📝 schreibe ins Log", [F("data.message", "", { type: "text" }), F("data.level", "Stufe", { type: "select", options: LOG_LEVELS }),
+      P("data.logger", "Logger")], [], C.flow);
+    // Version B: Helfer als globale Variable („setze Variable … auf …“). Ist ein normaler Dienstaufruf.
+    const gv = gvarSet(a);
+    if (gv) {
+      const d = gv.domain;
+      const ent = F("target.entity_id", "", { type: "entity", domains: [d] });
+      if (gv.bool) return mk("🧮 setze Wahr/Falsch-Variable", [ent, F("action", "auf", { type: "select", options: [["wahr", "input_boolean.turn_on"], ["falsch", "input_boolean.turn_off"]] })], [], C.gvar);
+      return mk(d === "input_number" ? "🧮 setze Zahl-Variable" : "🧮 setze Text-Variable", [ent, F("data.value", "auf", { type: "text" })], [], C.gvar);
     }
     if ("action" in a || "service" in a) {
       const key = "action" in a ? "action" : "service";
@@ -403,8 +416,10 @@
       if (typeof svc === "string") fields.push(...serviceDataFields(a, svc));
       else if (isObj(a.data)) fields.push(F("data", "Daten (JSON)", { type: "json" }));
       fields.push(P("data_template", "Daten (alt)", { type: "json" }));
-      fields.push(P("response_variable", "Antwort in Variable"));
-      return { ...mk(serviceTitle(svc), fields), svc: typeof svc === "string" ? svc : undefined };
+      const fn = isFunctionCall(svc);
+      fields.push(fn ? F("response_variable", "Ergebnis in Variable", { show: "always" }) : P("response_variable", "Antwort in Variable"));
+      const title = fn ? `ƒ Funktion: ${serviceTitle(svc).replace(/^\S+\s/, "")}` : serviceTitle(svc);
+      return { ...mk(title, fields), svc: typeof svc === "string" && !fn ? svc : undefined };
     }
     if ("event" in a) return mk("📣 Ereignis senden", [F("event", "Typ"), F("event_data", "Daten (JSON)", { type: "json" })]);
     if ("scene" in a) return mk("🎬 Szene aktivieren", [F("scene", "", { type: "entity", domains: ["scene"] })]);
@@ -427,7 +442,8 @@
   };
   const SVC_WORDS = { turn_on: "einschalten", turn_off: "ausschalten", toggle: "umschalten", open_cover: "öffnen", close_cover: "schließen",
     stop_cover: "stoppen", set_value: "Wert setzen", select_option: "Option wählen", press: "drücken", reload: "neu laden", trigger: "auslösen",
-    lock: "abschließen", unlock: "aufschließen", set_temperature: "Temperatur setzen", set_hvac_mode: "Modus setzen" };
+    lock: "abschließen", unlock: "aufschließen", set_temperature: "Temperatur setzen", set_hvac_mode: "Modus setzen",
+    start: "starten", cancel: "abbrechen", pause: "pausieren", finish: "beenden", change: "ändern" };
   const DOMAIN_DE = { light: "Licht", switch: "Schalter", fan: "Ventilator", climate: "Heizung", cover: "Rollladen", lock: "Schloss",
     media_player: "Medienplayer", notify: "Nachricht", scene: "Szene", script: "Skript", automation: "Automation", homeassistant: "Gerät",
     input_boolean: "Schalter-Helfer", input_number: "Zahlen-Helfer", input_select: "Auswahl-Helfer", input_text: "Text-Helfer",
@@ -458,9 +474,65 @@
     const icon = DOMAIN_ICON[d] || "▶️";
     let n = "";
     try { n = String(hooks.serviceName(svc) || "").replace(/^·\s*/, ""); } catch (e) { n = ""; }
-    if (!n && d === "script") { try { n = String(hooks.entityName(svc) || ""); } catch (e) { n = ""; } }
+    if (!n && d === "script") { try { n = String(hooks.entityName(svc) || "").replace(/^·\s*/, ""); } catch (e) { n = ""; } }
     if (!n) n = `${DOMAIN_DE[d] || hooks.domainName(d) || d} ${SVC_WORDS[s] || s.replace(/_/g, " ")}`;
     return `${icon} ${n}`;
+  }
+
+  // Version B: Timer (wie „Timeout“ bei ioBroker) – Auslöser „Timer abgelaufen“ = Ereignis timer.finished.
+  function isTimerFinished(t) {
+    if (!hooks.extended || !isObj(t) || t.trigger !== "event" || t.event_type !== "timer.finished") return false;
+    if (Object.keys(t).some((k) => !["trigger", "event_type", "event_data", "id", "alias", "enabled", "variables"].includes(k))) return false;
+    const d = t.event_data === undefined ? {} : t.event_data;
+    return isObj(d) && Object.keys(d).every((k) => k === "entity_id") && (d.entity_id === undefined || typeof d.entity_id === "string");
+  }
+  const TIMER_FINISHED = (entity = "") => ({ trigger: "event", event_type: "timer.finished", event_data: { entity_id: entity } });
+  // Version B: „schreibe ins Log“ (system_log.write, erscheint unter Einstellungen → System → Protokolle).
+  const LOG_LEVELS = [["(Standard: Warnung)", ""], ["Debug", "debug"], ["Info", "info"], ["Warnung", "warning"], ["Fehler", "error"], ["Kritisch", "critical"]];
+  function isLogWrite(a) {
+    if (!hooks.extended || !isObj(a) || a.action !== "system_log.write") return false;
+    if (Object.keys(a).some((k) => !["action", "data", "alias", "enabled", "continue_on_error"].includes(k))) return false;
+    const d = a.data === undefined ? {} : a.data;
+    return isObj(d) && Object.keys(d).every((k) => ["message", "level", "logger"].includes(k)) && Object.values(d).every(isPrim);
+  }
+
+  /* Version B: Funktionen = Skripte mit Eingaben (fields) und Rückgabewert.
+   * „gib zurück X“ ist in HA eine Folge aus zwei Schritten:
+   *   sequence: [ { variables: { funktion_ergebnis: { wert: X } } }, { stop: "Rückgabe", response_variable: funktion_ergebnis } ]
+   * Der Aufruf speichert das Ergebnis in einer Variable; gelesen wird es mit „Ergebnis von …“ ({{ ergebnis.wert }}). */
+  const RET_PATH = "sequence.0.variables.funktion_ergebnis.wert";
+  const RETURN = (value = "") => ({ sequence: [{ variables: { funktion_ergebnis: { wert: value } } }, { stop: "Rückgabe", response_variable: "funktion_ergebnis" }] });
+  function isReturn(a) {
+    if (!hooks.extended || !isObj(a) || Object.keys(a).some((k) => !["sequence", "alias", "enabled"].includes(k))) return false;
+    const s = a.sequence;
+    if (!Array.isArray(s) || s.length !== 2) return false;
+    const [v, st] = s;
+    return isObj(v) && Object.keys(v).join() === "variables" && isObj(v.variables) && Object.keys(v.variables).join() === "funktion_ergebnis"
+      && isObj(v.variables.funktion_ergebnis) && Object.keys(v.variables.funktion_ergebnis).join() === "wert" && isPrim(v.variables.funktion_ergebnis.wert)
+      && isObj(st) && Object.keys(st).sort().join() === "response_variable,stop" && st.response_variable === "funktion_ergebnis" && typeof st.stop === "string";
+  }
+  const SCRIPT_SERVICES = new Set(["turn_on", "turn_off", "toggle", "reload"]);
+  const isFunctionCall = (svc) => !!hooks.extended && typeof svc === "string" && svc.startsWith("script.") && !SCRIPT_SERVICES.has(svc.slice(7));
+  const NEW_FUNCTION = (alias, params = []) => ({
+    alias, description: "Funktion (Blockly): Eingaben über „Parameter“, Ergebnis mit „gib zurück“.",
+    fields: Object.fromEntries(params.map((p) => [p, { name: p, selector: { text: {} } }])),
+    sequence: [RETURN("")], mode: "parallel",
+  });
+
+  // Version B: Ist diese Aktion „globale Variable setzen“? Nur die einfache Form ohne weitere Angaben.
+  const GVAR_SET = { "input_number.set_value": "input_number", "input_text.set_value": "input_text", "input_boolean.turn_on": "input_boolean", "input_boolean.turn_off": "input_boolean" };
+  function gvarSet(a) {
+    if (!hooks.extended || !isObj(a) || typeof a.action !== "string" || !GVAR_SET[a.action]) return null;
+    if (Object.keys(a).some((k) => !["action", "target", "data", "alias", "enabled", "continue_on_error"].includes(k))) return null;
+    // Leere Angaben fehlen im Werkzeugkasten (target {} oder gar nicht da).
+    const t = a.target === undefined ? {} : a.target;
+    if (!isObj(t) || Object.keys(t).some((k) => k !== "entity_id") || (t.entity_id !== undefined && typeof t.entity_id !== "string")) return null;
+    const domain = GVAR_SET[a.action];
+    if (t.entity_id && !t.entity_id.startsWith(domain + ".")) return null;
+    if (domain === "input_boolean") return a.data === undefined ? { domain, bool: true } : null;
+    const d = a.data === undefined ? {} : a.data;
+    if (!isObj(d) || Object.keys(d).some((k) => k !== "value") || (d.value !== undefined && !isPrim(d.value))) return null;
+    return { domain };
   }
 
   const MODE_FIELDS = (cfg) => [
@@ -513,7 +585,10 @@
     return {
       title: "📜 Skript (Funktion)",
       colour: C.script,
-      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"), F("fields", "Eingaben (JSON)", { type: "json", show: hooks.blockly ? "always" : "present" })],
+      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"),
+        hooks.extended && (cfg.fields === undefined || isObj(cfg.fields))
+          ? F("fields", "Parameter", { type: "params", show: "always" })
+          : F("fields", "Eingaben (JSON)", { type: "json", show: hooks.blockly ? "always" : "present" })],
       lists: [L("sequence", "ABLAUF", "action")],
     };
   }
@@ -594,10 +669,14 @@
     return first;
   }
 
+  const paramName = (s) => String(s).trim().toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").replace(/^(\d)/, "_$1");
+
   // ---------- Feldwerte <-> HA-Werte ----------
   const LISTY = new Set(["entity", "state", "list", "triggerid", "area", "device", "floor"]);
   function toFieldString(v, f) {
     if (v === undefined) return "";
+    if (f.type === "params" && isObj(v)) return Object.keys(v).join(", ");
     if (Array.isArray(v) && LISTY.has(f.type) && v.every(isPrim)) return v.join(", ");
     if (isPrim(v)) return String(v);
     return JSON.stringify(v);
@@ -605,6 +684,12 @@
   function fromFieldString(val, f) {
     const orig = f.orig;
     if (f.type === "bool") return val === "true";
+    // Parameter einer Funktion: Namen mit Komma; bestehende Angaben (Name, Auswahl) bleiben erhalten.
+    if (f.type === "params") {
+      const o = {};
+      for (const n of val.split(",").map(paramName).filter(Boolean)) o[n] = isObj(orig) && orig[n] !== undefined ? orig[n] : { name: n, selector: { text: {} } };
+      return o;
+    }
     if (LISTY.has(f.type) && (Array.isArray(orig) || (orig === undefined && val.includes(",") && f.type !== "state"))) {
       return val.split(",").map((s) => s.trim()).filter(Boolean);
     }
@@ -863,7 +948,8 @@
       attribute: { free: true }, variable: { free: true },
     };
     // Wert-Bausteine: Entität, Zustand, Attribut, Variable mit Auswahlliste.
-    HAV.defineValueBlocks(Blockly, (kind, def) => new FieldPicker(def, { ...PICKER[kind], type: kind, of: "e", placeholder: kind === "variable" ? "⚠ Name" : undefined }));
+    HAV.defineValueBlocks(Blockly, (kind, def, name, extra) => new FieldPicker(def, { ...PICKER[kind], type: kind, of: "e",
+      domains: extra && extra.domains, placeholder: kind === "variable" ? "⚠ Name" : undefined }));
 
     const TIME_HINTS = () => [
       ...["06:00:00", "07:00:00", "08:00:00", "12:00:00", "18:00:00", "20:00:00", "22:00:00"],
@@ -1176,9 +1262,17 @@
     const btn = (text, callbackKey) => ({ kind: "button", text, callbackKey });
     // Skripte = eigene Funktionen: als Aufruf-Baustein; ihre Eingaben kommen aus dem Dienst-Schema.
     const scriptCat = { kind: "category", name: "Skripte (Funktionen)", colour: String(C.script), contents: [
-      btn("＋ Neues Skript anlegen …", "newScript"),
-      label("Ein Skript bündelt Schritte, die mehrere Automationen nutzen:"),
-      ...hooks.scripts().filter(([id]) => typeof id === "string" && id.startsWith("script.")).map(([id]) => tb("action", { action: id })),
+      ...(hooks.extended ? [
+        btn("＋ Neue Funktion anlegen …", "newFunction"),
+        label("In einer Funktion: Ergebnis zurückgeben, Parameter lesen"),
+        tb("action", RETURN(0)),
+        HAV.tbBlock("var", { v: "" }),
+        label("Nach dem Aufruf: Ergebnis lesen (Name wie bei „Ergebnis in Variable“)"),
+        HAV.tbBlock("fres", { v: "ergebnis" }),
+        label("Funktionen aufrufen:"),
+      ] : [btn("＋ Neues Skript anlegen …", "newScript"),
+        label("Ein Skript bündelt Schritte, die mehrere Automationen nutzen:")]),
+      ...hooks.scripts().filter(([id]) => typeof id === "string" && id.startsWith("script.")).map(([id]) => tb("action", hooks.extended ? { action: id, response_variable: "ergebnis" } : { action: id })),
     ] };
     const forKind = (box) => {
       if (kind === "script") box.contents = box.contents.filter((c) => c.colour !== String(C.trigger));
@@ -1334,6 +1428,14 @@
           V("var", { v: "repeat.index" }),
         ]),
         cat("Zeit", C.flow, [
+          ...(hooks.extended ? [
+            label("Timer – läuft im Hintergrund weiter, auch über einen Neustart (in HA ein Helfer):"),
+            btn("＋ Neuen Timer anlegen …", "newTimer"),
+            tb("action", { action: "timer.start", target: { entity_id: "" } }),
+            tb("action", { action: "timer.cancel", target: { entity_id: "" } }),
+            label("Auslöser, wenn der Timer abgelaufen ist:"),
+            tb("trigger", TIMER_FINISHED()),
+          ] : []),
           label("Warten"),
           tb("action", { delay: { hours: 0, minutes: 1, seconds: 0 } }),
           tb("action", { wait_template: "", timeout: { minutes: 5 }, continue_on_timeout: true }),
@@ -1352,6 +1454,11 @@
           V("txt"),
           V("join", null, { A: sh("txt", { s: "Temperatur: " }), B: sh("state") }),
           V("totext"),
+          ...(hooks.extended ? [
+            label("Ausgeben:"),
+            tb("action", { action: "system_log.write", data: { message: "", level: "info" } }),
+            tb("action", { action: "logbook.log", data: { name: "", message: "" } }),
+          ] : []),
         ]),
         cat("Werte aus HA", 30, [
           V("state"), V("statenum"), V("attr"), V("isstate"),
@@ -1359,6 +1466,15 @@
           V("trig"), V("trig", { w: "trigger.to_state.state" }), V("trig", { w: "trigger.entity_id" }),
         ]),
         cat("Variablen", 330, [
+          ...(hooks.extended ? [
+            label("Globale Variablen – bleiben nach einem Neustart erhalten (in HA ein Helfer):"),
+            btn("＋ Neue globale Variable anlegen …", "newGlobalVar"),
+            tb("action", { action: "input_number.set_value", target: { entity_id: "" }, data: { value: 0 } }),
+            tb("action", { action: "input_text.set_value", target: { entity_id: "" }, data: { value: "" } }),
+            tb("action", { action: "input_boolean.turn_on", target: { entity_id: "" } }),
+            V("gvar"),
+            label("Lokale Variablen – gelten nur während eines Laufs:"),
+          ] : []),
           tb("action", { variables: { name: "wert" } }),
           V("var"),
           label("Antwort eines Dienstes: im Dienst-Baustein „Antwort in Variable“ eintragen."),
@@ -1953,6 +2069,7 @@
         it("📣 Ereignis", { trigger: "event", event_type: "" }), it("💬 Sprachbefehl", { trigger: "conversation", command: "" }),
         it("📡 MQTT", { trigger: "mqtt", topic: "" }), it("🌐 Webhook", { trigger: "webhook", webhook_id: "", local_only: true }),
         it("🏷️ NFC-Tag", { trigger: "tag", tag_id: "" }), it("🔔 Benachrichtigung", { trigger: "persistent_notification", notification_id: "" })] },
+      ...(hooks.extended ? [{ group: "Timer", items: [it("⏲️ Timer abgelaufen", TIMER_FINISHED(), "nach „Timer starten“")] }] : []),
     ];
     if (kind === "condition") return [
       { group: "Entität", items: [it("🔎 Zustand ist", { condition: "state", entity_id: "", state: "" }), it("📏 Zahlenwert über/unter", { condition: "numeric_state", entity_id: "", below: 20 })] },
@@ -1976,7 +2093,20 @@
     }
     const byDomain = [...doms.entries()].sort((a, b) => String(domainName(a[0])).localeCompare(String(domainName(b[0])), "de"))
       .map(([d, items]) => ({ group: `Dienste: ${domainName(d) || d}`, items }));
+    const fnCalls = services.map((s) => (Array.isArray(s) ? s : [s, ""])).filter(([id]) => typeof id === "string" && id.startsWith("script.") && !SCRIPT_SERVICES.has(id.slice(7)))
+      .map(([id, n]) => it(`ƒ ${n || id}`, { action: id, response_variable: "ergebnis" }, "Funktion aufrufen, Ergebnis in „ergebnis“"));
+    const extended = hooks.extended ? [
+      { group: "Variablen", items: [
+        it("🧮 setze Zahl-Variable", { action: "input_number.set_value", target: { entity_id: "" }, data: { value: 0 } }, "globale Variable (Helfer)"),
+        it("🧮 setze Text-Variable", { action: "input_text.set_value", target: { entity_id: "" }, data: { value: "" } }, "globale Variable (Helfer)"),
+        it("🧮 setze Wahr/Falsch-Variable", { action: "input_boolean.turn_on", target: { entity_id: "" } }, "globale Variable (Helfer)")] },
+      { group: "Funktionen", items: [it("↩️ gib zurück", RETURN(0), "nur in einer Funktion (Skript)"), ...fnCalls] },
+      { group: "Timer & Log", items: [
+        it("⏲️ Timer starten", { action: "timer.start", target: { entity_id: "" } }), it("⏲️ Timer abbrechen", { action: "timer.cancel", target: { entity_id: "" } }),
+        it("📝 schreibe ins Log", { action: "system_log.write", data: { message: "", level: "info" } }, "Einstellungen → System → Protokolle")] },
+    ] : [];
     return [
+      ...extended,
       { group: "Häufig", items: [it("▶️ Dienst aufrufen …", { action: "" }, "beliebiger Dienst"), it("🎬 Szene aktivieren", { scene: "" }),
         it("📜 Skript ausführen", { action: "script.turn_on", target: { entity_id: "" } }), it("🔔 Benachrichtigung", { action: "persistent_notification.create", data: { message: "" } })] },
       { group: "Ablauf", items: [it("❓ Wenn … dann … sonst", { if: [], then: [], else: [] }), it("🔀 Auswahl (mehrere Fälle)", { choose: [{ conditions: [], sequence: [] }] }),
@@ -2004,7 +2134,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { TIMER_FINISHED, RETURN, NEW_FUNCTION, isReturn, serviceTitle, serviceChoices, SCENE_ATTRS, typeCatalog, convertType, stripEmpty, inputPlaceholder, INPUT_RE, sceneSpec, dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);
