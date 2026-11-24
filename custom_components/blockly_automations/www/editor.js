@@ -399,8 +399,120 @@
 
   // Einfach- oder Expertenmodus (Experte: Eingabefelder, alle Bausteine, JSON).
   const isExpert = () => store("haBlockly.expert") === "1";
-  HAB.hooks.simple = !isExpert();
+  // Bedienung aus den Einstellungen der Integration: HA-Auswahlfenster oder Blockly-Bausteine.
+  const CFG = (() => { try { return parent.__haBlocklyConfig || {}; } catch (e) { return {}; } })();
+  const UI = new URLSearchParams(location.search).get("ui") || CFG.ui_mode || "ha";
+  const BLOCKLY = UI === "blockly";
+  HAB.hooks.blockly = BLOCKLY;
+  HAB.hooks.expert = isExpert();
+  HAB.hooks.simple = !isExpert() && !BLOCKLY;
   document.body.classList.toggle("expert", isExpert());
+  document.body.classList.toggle("blocklyMode", BLOCKLY);
+
+  // ---------- Blockly-Modus: Auswahllisten im Baustein statt HA-Fenster ----------
+  S.devEntries = {};
+  HAB.hooks.domainName = (d) => loc(`component.${d}.title`) || pretty(d);
+  const areaName = (id) => { const a = id && S.hass.areas && S.hass.areas[id]; return a ? a.name : ""; };
+  const entityArea = (eid) => {
+    const e = S.hass.entities && S.hass.entities[eid];
+    if (!e) return "";
+    if (e.area_id) return areaName(e.area_id);
+    const d = e.device_id && S.hass.devices && S.hass.devices[e.device_id];
+    return d ? areaName(d.area_id) : "";
+  };
+  const siblingValue = (field, path) => {
+    const b = field.getSourceBlock();
+    if (!b) return "";
+    const m = (b.fieldMap_ || []).find((x) => x.path === path);
+    const v = m ? b.getFieldValue(m.name) : HAB.getPath(b.raw_, path);
+    return typeof v === "string" ? v.split(",")[0].trim() : Array.isArray(v) ? v[0] : "";
+  };
+  const devTypeKey = { trigger: "trigger_type", condition: "condition_type", action: "action_type" };
+  function devLabel(kind, e) {
+    if (!isObj(e)) return "";
+    let t = loc(`component.${e.domain}.device_automation.${devTypeKey[kind] || "trigger_type"}.${e.type}`) || pretty(e.type);
+    const sub = e.subtype !== undefined && e.subtype !== "" ? loc(`component.${e.domain}.device_automation.trigger_subtype.${e.subtype}`) || pretty(e.subtype) : "";
+    const ent = e.entity_id ? (S.hass.states[e.entity_id] ? ename(e.entity_id) : (S.hass.entities && Object.values(S.hass.entities).find((x) => x.id === e.entity_id) || {}).entity_id || "") : "";
+    t = t.replace("{entity_name}", ent ? ename(ent) : "").replace("{subtype}", sub);
+    if (sub && !t.includes(sub)) t += " · " + sub;
+    return t.replace(/\s+/g, " ").trim();
+  }
+  const TIMES = ["06:00:00", "06:30:00", "07:00:00", "08:00:00", "12:00:00", "17:00:00", "18:00:00", "20:00:00", "22:00:00", "23:00:00"];
+  HAB.hooks.options = (type, field) => {
+    if (!S.hass) return [];
+    const def = field.def_ || {};
+    const byGroup = (a, b) => String(a[2] || "").localeCompare(String(b[2] || ""), "de") || String(a[1] || a[0]).localeCompare(String(b[1] || b[0]), "de");
+    switch (type) {
+      case "entity":
+        return Object.values(S.hass.states)
+          .filter((s) => !def.domains || !def.domains.length || def.domains.includes(s.entity_id.split(".")[0]))
+          .map((s) => { const d = s.entity_id.split(".")[0]; const ar = entityArea(s.entity_id); return [s.entity_id, fname(s) || s.entity_id, HAB.hooks.domainName(d), (ar ? ar + " · " : "") + s.entity_id]; })
+          .sort(byGroup);
+      case "state":
+        return HAB.hooks.states(siblingValue(field, def.of || "entity_id")).map(([v, l]) => [v, l || v]);
+      case "service":
+        return HAB.hooks.services().map(([id, name]) => [id, name || id, HAB.hooks.domainName(id.split(".")[0]), id]).sort(byGroup);
+      case "area":
+        return Object.values(S.hass.areas || {}).map((a) => [a.area_id, a.name, (a.floor_id && S.hass.floors && S.hass.floors[a.floor_id] && S.hass.floors[a.floor_id].name) || "Bereiche"]).sort(byGroup);
+      case "floor":
+        return Object.values(S.hass.floors || {}).map((f) => [f.floor_id, f.name]);
+      case "device":
+        return Object.values(S.hass.devices || {}).filter((d) => !d.disabled_by)
+          .map((d) => [d.id, d.name_by_user || d.name || d.id, areaName(d.area_id) || "Ohne Bereich", [d.manufacturer, d.model].filter(Boolean).join(" ")]).sort(byGroup);
+      case "time":
+        return [...TIMES.map((t) => [t, t.slice(0, 5), "Uhrzeit"]),
+          ...Object.values(S.hass.states).filter((s) => s.entity_id.startsWith("input_datetime.") || (s.entity_id.startsWith("sensor.") && s.attributes.device_class === "timestamp"))
+            .map((s) => [s.entity_id, fname(s) || s.entity_id, "Helfer / Sensor"])];
+      case "triggerid":
+        return HAB.triggerIds(currentConfig()).map((x) => [x, x]);
+      case "devauto": {
+        const dev = siblingValue(field, "device_id");
+        if (!dev) return Promise.reject(new Error("Bitte zuerst ein Gerät wählen"));
+        return S.hass.callWS({ type: `device_automation/${def.kind}/list`, device_id: dev }).then((list) =>
+          (Array.isArray(list) ? list : []).map((e) => {
+            const key = HAB.devKey(e);
+            S.devEntries[key] = e;
+            return [key, devLabel(def.kind, e), "", e.entity_id && S.hass.states[e.entity_id] ? e.entity_id : ""];
+          }).filter((o) => o[0]));
+      }
+      default:
+        return [];
+    }
+  };
+  HAB.hooks.optionLabel = (type, v, field) => {
+    if (!S.hass || v === "") return "";
+    const def = (field && field.def_) || {};
+    switch (type) {
+      case "entity": { const st = S.hass.states[v]; return st ? fname(st) || v : v; }
+      case "service": { const n = HAB.hooks.serviceName(v); return n ? n.replace(/^·\s*/, "") : v; }
+      case "area": return areaName(v) || v;
+      case "floor": return (S.hass.floors && S.hass.floors[v] && S.hass.floors[v].name) || v;
+      case "device": return deviceName(v) === "Gerät" ? v : deviceName(v);
+      case "state": return stateText(siblingValue(field, def.of || "entity_id"), v) || v;
+      case "time": return timeText(v);
+      case "devauto": {
+        if (S.devEntries[v]) return devLabel(def.kind, S.devEntries[v]);
+        try { const [domain, t, subtype, entity_id] = JSON.parse(v); return devLabel(def.kind, { domain, type: t, subtype, entity_id }); } catch (e) { return v; }
+      }
+      default: return v;
+    }
+  };
+  HAB.hooks.deviceEntry = (key) => S.devEntries[key] || null;
+  // „＋ … hinzufügen“ öffnet im Blockly-Modus die passende Kategorie im Werkzeugkasten.
+  const TOOLBOX_CAT = { trigger: "Auslöser", condition: "Bedingungen", action: "Aktionen", option: "Ablauf" };
+  function openToolboxFor(kind) {
+    try {
+      const tbx = S.ws.getToolbox();
+      const item = tbx.getToolboxItems().find((x) => x.getName && x.getName() === TOOLBOX_CAT[kind]);
+      if (item) tbx.setSelectedItem(item);
+      status(`Baustein aus „${TOOLBOX_CAT[kind]}“ in die Lücke ziehen`, "ok");
+    } catch (e) { /* optional */ }
+  }
+  if (BLOCKLY) {
+    HAB.hooks.openEditor = null;
+    HAB.hooks.pickField = null;
+    HAB.hooks.addItem = (block, inputName, kind) => openToolboxFor(kind);
+  }
 
   HAB.defineBlocks(Blockly);
 
@@ -1453,16 +1565,23 @@
     const on = !isExpert();
     store("haBlockly.expert", on ? "1" : "0");
     document.body.classList.toggle("expert", on);
-    HAB.hooks.simple = !on;
+    HAB.hooks.simple = !on && !BLOCKLY;
+    HAB.hooks.expert = on;
     if (!on) $("side").classList.add("hidden");
     if (!S.ws) return;
     S.ws.updateToolbox(HAB.buildToolbox(rootKind()));
     const cfg = currentConfig();
     if (cfg) { reloadKeepingLayout(cfg); showRoot(); }
     Blockly.svgResize(S.ws);
-    status(on ? "Expertenmodus: Eingabefelder und alle Bausteine" : "Einfacher Modus", "ok");
+    status(on ? (BLOCKLY ? "Expertenmodus: JSON-Seitenleiste und Roh-JSON-Bausteine" : "Expertenmodus: Eingabefelder und alle Bausteine")
+      : BLOCKLY ? "Blockly-Modus" : "Einfacher Modus", "ok");
   });
   $("newCat").addEventListener("click", createCategory);
+  $("settingsBtn").addEventListener("click", () => {
+    if (!confirmDiscard()) return;
+    try { parent.__haBlocklyNavigate("/config/integrations/integration/blockly_automations"); } catch (e) { status("Einstellungen: Einstellungen → Geräte & Dienste → Blockly Automations → Konfigurieren", "warn"); }
+  });
+  $("settingsBtn").title = `Einstellungen – Bedienung: ${BLOCKLY ? "Blockly-Bausteine" : "Home-Assistant-Fenster"}`;
   $("category").addEventListener("change", async (e) => {
     let v = e.target.value;
     if (v === "__new__") {

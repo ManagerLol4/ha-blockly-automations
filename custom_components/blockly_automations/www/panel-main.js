@@ -27,7 +27,12 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
   }
 
   set panel(panel) {
+    const before = this._panel && this._panel.config && this._panel.config.ui_mode;
     this._panel = panel;
+    window.__haBlocklyConfig = (panel && panel.config) || {};
+    // Einstellung „Bedienung“ geändert: Editor mit der neuen Einstellung neu laden.
+    const now = window.__haBlocklyConfig.ui_mode;
+    if (this._frame && before !== undefined && now !== before) this._frame.src = this._frame.src;
     this._render();
   }
 
@@ -69,6 +74,12 @@ class HaBlocklyAutomationsPanel extends HTMLElement {
     window.__haBlocklyAddItem = (kind) => this._addItem(kind);
     window.__haBlocklyPick = (opts) => this._pick(opts);
     window.__haBlocklyPrepare = () => this._ensureComponents();
+    window.__haBlocklyConfig = cfg;
+    // Zu einer HA-Seite wechseln (z. B. Einstellungen der Integration).
+    window.__haBlocklyNavigate = (path) => {
+      history.pushState(null, "", path);
+      window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+    };
     this._refreshMarketplace();
   }
 

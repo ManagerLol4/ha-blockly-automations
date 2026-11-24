@@ -30,6 +30,20 @@ Satz: **WENN** … **NUR WENN** … **DANN** … Gedacht für alle, auch ohne Te
 
 ## Bedienung
 
+### Zwei Arten zu bearbeiten (Einstellung)
+
+Unter **Einstellungen → Geräte & Dienste → Blockly Automations → Konfigurieren** (oder ⚙ oben im
+Editor) wählst du die **Bedienung**:
+
+| | Home-Assistant-Auswahlfenster (Standard) | Blockly-Bausteine |
+|---|---|---|
+| Werte ändern | Wert im Baustein anklicken → originales HA-Fenster | direkt im Baustein: Auswahlliste mit Suche (Entitäten nach Art gruppiert, Bereiche, Geräte, Zustände, Dienste, Zeiten) – eigene Werte/Templates mit Enter |
+| Hinzufügen | „＋ … hinzufügen“ öffnet den HA-Dialog | „＋ … hinzufügen“ öffnet die passende Kategorie im Werkzeugkasten; Bausteine in die Lücke ziehen |
+| Werkzeugkasten | wenige, einfache Bausteine | alle Auslöser, Bedingungen, Abläufe, **alle Dienste** (nach Integration), **Geräte-Auslöser/-Bedingungen/-Aktionen** (Gerät wählen → Art wählen) |
+| Gedacht für | Einsteiger | Umsteiger aus ioBroker, alle, die lieber mit Bausteinen arbeiten |
+
+Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
+
 Aufbau wie der Blockly-Skripteditor in ioBroker: links die Liste, rechts die Bausteine.
 
 1. **Liste links:** Ordner = HA-Kategorien, mit Suche und Ein/Aus-Schalter. Automationen mit der

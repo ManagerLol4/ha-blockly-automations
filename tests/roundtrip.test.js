@@ -325,6 +325,57 @@ ok("querverweise", () => {
   assert.deepStrictEqual(s.map((x) => [x.entity, x.role, x.path]), [["light.a", "condition", "condition/0"]]);
 });
 
+// 20) Blockly-Modus: alles verlustfrei, alle Bausteine aus dem Werkzeugkasten, Geräte-Bausteine.
+ok("blockly-modus", () => {
+  HAB.hooks.blockly = true;
+  HAB.hooks.services = () => [["light.turn_on", "Licht an"], ["light.turn_off", ""], ["notify.mobile_app_x", ""], ["script.abc", ""]];
+  HAB.hooks.serviceTarget = (s) => s.startsWith("light.");
+  try {
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".json"))) {
+      const cfg = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(cfg)), cfg, `Blockly-Modus: ${f}`);
+    }
+    const box = HAB.buildToolbox("root");
+    const names = box.contents.map((c) => c.name);
+    assert.ok(names.includes("Alle Dienste") && !names.includes("Roh-JSON"));
+    const all = box.contents.find((c) => c.name === "Alle Dienste");
+    assert.deepStrictEqual(all.contents.map((c) => c.contents.length).reduce((a, b) => a + b, 0), 4);
+    const walk = (c) => (c.contents || []).flatMap((x) => (x.kind === "category" ? walk(x) : [x]));
+    for (const item of walk(box).filter((x) => x.kind === "block")) {
+      const raw = item.extraState.raw;
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(raw, item.type.slice(3))), raw, `Werkzeugkasten Blockly ${JSON.stringify(raw)}`);
+    }
+    // Ziel: Bereich wählbar, auch wenn noch nicht gesetzt
+    const act = { action: "light.turn_on", target: { entity_id: "light.a" } };
+    let b = toBlocks(act, "action");
+    b.setFieldValue("wohnzimmer", field(b, "target.area_id"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { action: "light.turn_on", target: { entity_id: "light.a", area_id: "wohnzimmer" } });
+    // Bereichsliste bleibt Liste
+    const act2 = { action: "light.turn_on", target: { area_id: ["a", "b"] } };
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(act2, "action")), act2);
+    // Geräte-Auslöser: neue Art wählen ersetzt den Inhalt, ID/alias bleiben
+    const dt = { trigger: "device", device_id: "dev1", domain: "zha", type: "remote_button_short_press", subtype: "turn_on", id: "knopf" };
+    b = toBlocks(dt, "trigger");
+    assert.deepStrictEqual(HAB.blockToItem(b), dt);
+    const entry = { platform: "device", device_id: "dev1", domain: "zha", type: "remote_button_long_press", subtype: "turn_off", metadata: {} };
+    HAB.hooks.deviceEntry = (k) => (k === HAB.devKey(entry) ? entry : null);
+    b.setFieldValue(HAB.devKey(entry), field(b, "__devauto"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { id: "knopf", trigger: "device", device_id: "dev1", domain: "zha", type: "remote_button_long_press", subtype: "turn_off" });
+    // Geräte-Aktion aus dem Werkzeugkasten: zunächst unvollständig (Hinweis), dann gefüllt
+    assert.ok(HAB.missingInfo({ device_id: "" }));
+    assert.ok(HAB.missingInfo({ trigger: "device", device_id: "dev1" }));
+    assert.ok(!HAB.missingInfo(dt));
+    // Skript: Eingaben im Blockly-Modus immer bearbeitbar
+    const sc = toBlocks(HAB.NEW_SCRIPT("x"), "script");
+    assert.ok(sc.fieldMap_.some((f) => f.path === "fields"));
+  } finally {
+    HAB.hooks.blockly = false;
+    HAB.hooks.services = () => [];
+    HAB.hooks.serviceTarget = () => null;
+    HAB.hooks.deviceEntry = () => null;
+  }
+});
+
 // 13) Versionsnummern stimmen überein (manifest, package.json, version.json).
 ok("version", () => {
   const read = (...p) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", ...p), "utf8")).version;

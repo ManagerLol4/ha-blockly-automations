@@ -160,3 +160,18 @@ body.expert #expert { background: var(--accent); color: #fff; border-color: var(
   #insp { position: absolute; top: 0; bottom: 0; right: 0; width: 100%; z-index: 50; }
   .xr { min-width: 0; }
 }
+
+/* Blockly-Modus: Auswahlliste mit Suche im Baustein */
+.hab-picker { width: 340px; max-width: 90vw; display: flex; flex-direction: column; font: 13px/1.35 Roboto, "Segoe UI", system-ui, sans-serif; color: #212121; }
+.hab-picker input { margin: 6px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; color: #212121; background: #fff; }
+.hab-plist { height: 260px; overflow: auto; }
+.blocklyDropDownContent:has(.hab-picker) { max-height: none !important; overflow: visible !important; }
+.hab-pgroup { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: #757575; padding: 6px 10px 2px; position: sticky; top: 0; background: #fff; }
+.hab-pitem { padding: 5px 10px; cursor: pointer; display: flex; flex-direction: column; }
+.hab-pitem:hover { background: rgba(3,169,244,.12); }
+.hab-pitem.sel { background: rgba(3,169,244,.2); font-weight: 600; }
+.hab-pitem small { color: #757575; font-size: 11px; }
+.hab-pfoot { display: flex; gap: 8px; align-items: center; padding: 6px; border-top: 1px solid #e0e0e0; }
+.hab-pfoot span { flex: 1; font-size: 11px; color: #757575; }
+.hab-pfoot button { font: inherit; padding: 3px 10px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #212121; cursor: pointer; }
+.hab-pfoot button.primary { background: #03a9f4; color: #fff; border-color: #03a9f4; }

@@ -15,5 +15,27 @@
       "title": "Blockly Automations: restart required",
       "description": "Version {version} has been installed and contains changes that only take effect after a restart of Home Assistant. Restart Home Assistant when convenient (Settings → System → Restart). The editor itself already uses the new version."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Blockly Automations settings",
+        "description": "Choose how blocks are edited.",
+        "data": {
+          "ui_mode": "Editing"
+        },
+        "data_description": {
+          "ui_mode": "Home Assistant dialogs: values are chosen in the original Home Assistant windows (recommended for beginners). Blockly blocks: everything is set directly inside the blocks with searchable lists, all services and device blocks in the toolbox – like the Blockly editor in ioBroker."
+        }
+      }
+    }
+  },
+  "selector": {
+    "ui_mode": {
+      "options": {
+        "ha": "Home Assistant dialogs",
+        "blockly": "Blockly blocks"
+      }
+    }
   }
 }
