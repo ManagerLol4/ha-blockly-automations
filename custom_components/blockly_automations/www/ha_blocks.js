@@ -96,6 +96,8 @@
     addVariable: null,           // (block) -> neue Variable in „Variablen setzen“
     ifToChoose: null,            // (block) -> „Wenn“ um „sonst wenn“ erweitern (wird zur Auswahl)
     extractScript: null,         // (block, alle folgenden?) -> Schritte als neues Skript auslagern
+    entityExists: () => null,    // (entity_id) -> true/false, null = unbekannt (Prüfregel „gibt es nicht“)
+    entityIds: () => [],         // () -> alle entity_ids (für Korrekturvorschläge)
   };
 
   // Felder, in die im Blockly-Modus ein Wert-Baustein gesteckt werden kann (dort sind Templates erlaubt).
@@ -1340,7 +1342,7 @@
   function lint(cfg, kind = "root") {
     const out = [];
     if (!isObj(cfg) || isObj(cfg.use_blueprint)) return out;
-    const add = (path, level, msg) => out.push({ path, level, msg });
+    const add = (path, level, msg, fix) => out.push(fix ? { path, level, msg, fix } : { path, level, msg });
     const ids = triggerIds(cfg);
     const mode = cfg.mode || "single";
     if (kind === "root" && !triggersOf(cfg).length) add("", "warn", "Diese Automation hat keinen Auslöser – sie startet nie von selbst.");
@@ -1349,7 +1351,14 @@
       if (!isObj(item) || !path) return;
       if (k === "condition" && item.condition === "trigger" && kind === "root") {
         const missing = [].concat(item.id === undefined ? [] : item.id).filter((x) => isPrim(x) && x !== "" && !ids.includes(String(x)));
-        if (missing.length) add(path, "warn", `Trigger-ID „${missing.join("“, „")}“ gibt es bei den Auslösern dieser Automation nicht.`);
+        if (missing.length) {
+          const fixes = missing.map((m) => [m, closest(String(m), ids)]).filter(([, c]) => c);
+          const fix = fixes.length ? {
+            label: fixes.map(([m, c]) => `„${m}“ → „${c}“`).join(", ") + " ändern",
+            apply: (c) => atPath(c, kind, path, (it) => { it.id = Array.isArray(it.id) ? it.id.map((x) => (fixes.find(([m]) => m === x) || [0, x])[1]) : (fixes[0] || [0, it.id])[1]; }),
+          } : null;
+          add(path, "warn", `Trigger-ID „${missing.join("“, „")}“ gibt es bei den Auslösern dieser Automation nicht.`, fix);
+        }
       }
       const waits = [];
       if (k === "action") {
@@ -1368,13 +1377,159 @@
         const sec = "delay" in item ? durationSeconds(item.delay) : null;
         if (sec === null || sec >= 5) {
           singleWarned = true;
-          add(path, "info", "Modus „single“: Solange hier gewartet wird, werden neue Auslösungen ignoriert. Für Bewegungslicht o. Ä. passt meist „restart“.");
+          add(path, "info", "Modus „single“: Solange hier gewartet wird, werden neue Auslösungen ignoriert. Für Bewegungslicht o. Ä. passt meist „restart“.",
+            { label: "Modus auf „restart“ setzen", apply: (c) => { const n = clone(c); n.mode = "restart"; delete n.max; return n; } });
         }
       }
       if (k === "action" && "if" in item && [].concat(item.then || []).length === 0 && [].concat(item.else || []).length === 0)
         add(path, "info", "„Wenn“ ohne Aktionen in „dann“ und „sonst“ hat keine Wirkung.");
     });
+    // Entitäten, die es in Home Assistant nicht (mehr) gibt – häufigster echter Fehler.
+    const seen = new Set();
+    for (const r of references(cfg, kind)) {
+      const key = r.path + "|" + r.entity;
+      if (seen.has(key) || hooks.entityExists(r.entity) !== false) continue;
+      seen.add(key);
+      const dom = r.entity.split(".")[0];
+      const cand = closest(r.entity.slice(dom.length + 1), hooks.entityIds().filter((e) => e.startsWith(dom + ".")).map((e) => e.slice(dom.length + 1)), 0.34);
+      const repl = cand ? `${dom}.${cand}` : null;
+      add(r.path, "warn", `Entität „${r.entity}“ gibt es in Home Assistant nicht (mehr) oder sie ist deaktiviert.`,
+        repl ? { label: `Durch „${repl}“ ersetzen (überall)`, apply: (c) => replaceEntity(c, r.entity, repl) } : null);
+    }
     return out;
+  }
+
+  /* ---------- Trockenlauf: was würde jetzt passieren? ----------
+   * Geht die Automation durch, ohne etwas auszuführen. Bedingungen prüft test(cond, vars)
+   * (in HA: test_condition) – true/false oder null (nicht prüfbar, dann als erfüllt angenommen).
+   * trigger: { index, id, vars } – welcher Auslöser angenommen wird.
+   * Ergebnis: { steps: { pfad: [ {result:{result}} | {} | {unknown:true} ] }, log: [] } – wie ein Trace. */
+  async function dryRun(cfg, kind, test, trigger = {}) {
+    const steps = {};
+    const log = [];
+    const vars = trigger.vars || {};
+    const mark = (p, v) => (steps[p] = steps[p] || []).push(v);
+    const evalCond = async (c, p) => {
+      if (isObj(c) && c.enabled === false) return true;
+      let r;
+      if (isObj(c) && c.condition === "trigger") r = [].concat(c.id === undefined ? [] : c.id).map(String).includes(String(trigger.id));
+      else { try { r = await test(c, vars); } catch (e) { r = null; } }
+      mark(p, r === null || r === undefined ? { unknown: true } : { result: { result: !!r } });
+      return r !== false;
+    };
+    const allConds = async (list, base, seg) => {
+      const arr = [].concat(list === undefined || list === null ? [] : list);
+      for (let i = 0; i < arr.length; i++) if (!(await evalCond(arr[i], join(base, seg, i)))) return false;
+      return true;
+    };
+    const runSeq = async (list, base, seg) => {
+      const arr = [].concat(list === undefined || list === null ? [] : list);
+      for (let i = 0; i < arr.length; i++) if (!(await runStep(arr[i], join(base, seg, i)))) return false;
+      return true;
+    };
+    async function runStep(it, p) {
+      if (isObj(it) && it.enabled === false) return true;
+      if (typeof it === "string" || (isObj(it) && "condition" in it)) return evalCond(it, p);
+      if (!isObj(it)) { mark(p, {}); return true; }
+      if ("if" in it) {
+        mark(p, {});
+        if (await allConds(it.if, p, "if")) return runSeq(it.then, p, "then");
+        return it.else !== undefined ? runSeq(it.else, p, "else") : true;
+      }
+      if ("choose" in it) {
+        mark(p, {});
+        const opts = [].concat(it.choose || []);
+        for (let j = 0; j < opts.length; j++) {
+          const op = isObj(opts[j]) ? opts[j] : {};
+          const opPath = join(p, "choose", j);
+          if (op.enabled === false) continue;
+          if (await allConds(op.conditions, opPath, "conditions")) { mark(opPath, {}); return runSeq(op.sequence, opPath, "sequence"); }
+        }
+        return it.default !== undefined ? runSeq(it.default, p, "default") : true;
+      }
+      if ("repeat" in it) {
+        mark(p, {});
+        const r = isObj(it.repeat) ? it.repeat : {};
+        if ("while" in r && !(await allConds(r.while, p, "repeat/while"))) return true;
+        log.push(`${p}: Wiederholung – nur ein Durchlauf betrachtet.`);
+        return runSeq(r.sequence, p, "repeat/sequence");
+      }
+      if ("parallel" in it) {
+        mark(p, {});
+        const arr = [].concat(it.parallel || []);
+        for (let j = 0; j < arr.length; j++) await runStep(arr[j], join(p, "parallel", j));
+        return true;
+      }
+      if ("sequence" in it) { mark(p, {}); return runSeq(it.sequence, p, "sequence"); }
+      if ("stop" in it) { mark(p, {}); log.push(`${p}: Stopp${it.stop ? " – " + it.stop : ""}.`); return false; }
+      if ("delay" in it || "wait_template" in it || "wait_for_trigger" in it) log.push(`${p}: würde hier warten.`);
+      mark(p, {});
+      return true;
+    }
+    if (!isObj(cfg)) return { steps, log };
+    if (kind === "script") { await runSeq(cfg.sequence, "", "sequence"); return { steps, log }; }
+    const ti = Number.isInteger(trigger.index) ? trigger.index : 0;
+    if (triggersOf(cfg).length) mark(`trigger/${ti}`, {});
+    const condKey = "conditions" in cfg ? "conditions" : "condition";
+    if (!(await allConds(cfg[condKey], "", "condition"))) { log.push("Die Bedingungen unter NUR WENN sind jetzt nicht erfüllt – es würde nichts passieren."); return { steps, log }; }
+    await runSeq("actions" in cfg ? cfg.actions : cfg.action, "", "action");
+    return { steps, log };
+  }
+
+  // Ähnlichster Name (Tippfehler), sonst null. maxRel: erlaubter Anteil an Änderungen.
+  function closest(word, list, maxRel = 0.4) {
+    let best = null, bestD = Infinity;
+    for (const c of list) {
+      if (c === word) continue;
+      const d = levenshtein(word.toLowerCase(), String(c).toLowerCase());
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    return best !== null && bestD <= Math.max(2, Math.round(word.length * maxRel)) ? best : null;
+  }
+  function levenshtein(a, b) {
+    if (Math.abs(a.length - b.length) > 12) return 99;
+    const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      let diag = prev[0];
+      prev[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const tmp = prev[j];
+        prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+        diag = tmp;
+      }
+    }
+    return prev[b.length];
+  }
+  // Element an einem Pfad in einer Kopie ändern.
+  function atPath(cfg, kind, path, fn) {
+    const c = clone(cfg);
+    walkConfig(c, kind, (item, k, p) => { if (p === path && isObj(item)) fn(item); });
+    return c;
+  }
+  // Entität überall ersetzen: als Wert und in Templates.
+  function replaceEntity(cfg, from, to) {
+    const re = new RegExp(`(?<![\\w.])${from.replace(/\./g, "\\.")}(?![\\w])`, "g");
+    const map = (v) => {
+      if (typeof v === "string") return v === from ? to : v.includes("{") ? v.replace(re, to) : v;
+      if (Array.isArray(v)) return v.map(map);
+      if (isObj(v)) { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = map(x); return o; }
+      return v;
+    };
+    // Wert-Bausteine: Baum mit ersetzter Entität neu erzeugen (sonst würde der Kommentar ungültig).
+    const mapTpl = (v) => {
+      if (typeof v === "string") {
+        const t = HAV.decode(v);
+        if (t) {
+          const walk = (n) => { if (!n) return n; const m = clone(n); if (m.f && m.f.e === from) m.f.e = to; if (m.a) m.a = m.a.map(walk); return m; };
+          return HAV.compile(walk(t));
+        }
+        return map(v);
+      }
+      if (Array.isArray(v)) return v.map(mapTpl);
+      if (isObj(v)) { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = mapTpl(x); return o; }
+      return v;
+    };
+    return mapTpl(cfg);
   }
 
   /* Querverweise: welche Entitäten eine Konfiguration auslöst, prüft oder schaltet.
@@ -1608,7 +1763,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { dryRun, replaceEntity, closest, atPath, planExtract, templateRefs, HAV, toYaml, devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

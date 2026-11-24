@@ -108,6 +108,17 @@ als Felder. So baut man Abläufe einmal und nutzt sie in vielen Automationen.
   Wartezeit (übersteht keinen Neustart → Timer-Helfer), Modus „single“ mit Wartezeit, Automation
   ohne Auslöser. Hinweise erscheinen auch als 💡 am Baustein; Anklicken springt hin.
 
+### Sicher speichern und ausprobieren
+
+- **Konflikt-Schutz:** Wurde die Automation inzwischen woanders geändert (HA-Editor, anderes Fenster),
+  fragt *Speichern* nach: abbrechen, neu laden oder bewusst überschreiben.
+- **🧪 Trockenlauf** (im 🔍-Inspektor): „Was würde jetzt passieren?“ – wählt einen Auslöser, prüft
+  Bedingungen und Zweige mit den Zuständen von jetzt und markiert den Weg wie bei einem Trace.
+  Es wird **nichts ausgeführt**. Nicht prüfbare Bedingungen (gelb) gelten als erfüllt.
+- **Hinweise mit Korrektur:** z. B. *Entität gibt es nicht (mehr)* mit Vorschlag der ähnlichsten
+  Entität, *Trigger-ID mit Tippfehler*, *Modus auf „restart“ setzen* – ein Klick auf 🔧 ändert es
+  (rückgängig mit ↶, gespeichert erst mit *Speichern*).
+
 ### 🔗 Querverweise
 
 Zeigt für jede Entität, welche Automationen/Skripte auf sie **auslösen**, sie **prüfen**, sie
