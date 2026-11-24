@@ -504,6 +504,9 @@
     }
   };
   HAB.hooks.deviceEntry = (key) => S.devEntries[key] || null;
+  // Prüfregel „Entität gibt es nicht“: nur entscheiden, wenn HA-Zustände da sind.
+  HAB.hooks.entityExists = (eid) => (S.hass && Object.keys(S.hass.states).length ? !!S.hass.states[eid] : null);
+  HAB.hooks.entityIds = () => (S.hass ? Object.keys(S.hass.states) : []);
   // „＋ … hinzufügen“ öffnet im Blockly-Modus die passende Kategorie im Werkzeugkasten.
   const TOOLBOX_CAT = { trigger: "Auslöser", condition: "Bedingungen", action: "Aktionen", option: "Ablauf" };
   function openToolboxFor(kind) {
@@ -548,6 +551,36 @@
       $("askOk").onclick = () => done(inp.value);
       $("askCancel").onclick = () => done(null);
       inp.onkeydown = (e) => { if (e.key === "Enter") done(inp.value); if (e.key === "Escape") done(null); };
+    });
+  }
+
+  // Eigenes Auswahlfenster mit Knöpfen (statt confirm()). Ergebnis: Wert des Knopfs oder null.
+  function askChoice(title, text, buttons) {
+    return new Promise((resolve) => {
+      const box = $("ask");
+      $("askTitle").textContent = title;
+      $("askHint").textContent = text;
+      $("askInput").style.display = "none";
+      const foot = box.querySelector(".askFoot");
+      const old = foot.innerHTML;
+      foot.innerHTML = "";
+      const done = (v) => {
+        box.classList.add("hidden");
+        foot.innerHTML = old;
+        $("askInput").style.display = "";
+        document.removeEventListener("keydown", onKey, true);
+        resolve(v);
+      };
+      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
+      document.addEventListener("keydown", onKey, true);
+      for (const [label, value, primary] of buttons) {
+        const b = document.createElement("button");
+        b.textContent = label;
+        if (primary) b.className = "primary";
+        b.addEventListener("click", () => done(value));
+        foot.appendChild(b);
+      }
+      box.classList.remove("hidden");
     });
   }
 
@@ -1083,6 +1116,7 @@
     return null;
   }
 
+  const KIND_NAME = () => (S.kind === "script" ? "Skript" : "Automation");
   async function save() {
     if (!S.id || !S.lossless) return;
     // Offenen Feld-Editor schließen, damit sein Wert sicher übernommen ist.
@@ -1090,9 +1124,22 @@
     await new Promise((r) => setTimeout(r, 30));
     const cfg = currentConfig();
     if (!S.isNew && HAB.deepEqual(cfg, S.original)) { updateStatus(); return; }
-    if (looseCount() && !confirm(`${looseCount()} Baustein(e) hängen nicht an der Automation und werden nicht gespeichert. Trotzdem speichern?`)) return;
+    const yesNo = (title, text) => askChoice(title, text, [["Abbrechen", false], ["Trotzdem speichern", true, true]]);
+    if (looseCount() && !(await yesNo("Lose Bausteine", `${looseCount()} Baustein(e) hängen nicht an der ${KIND_NAME()} und werden nicht gespeichert.`))) return;
     const missing = markMissing();
-    if (missing && !confirm(`Bei ${missing} Baustein(en) fehlt noch eine Auswahl (⚠). Home Assistant lehnt das evtl. ab. Trotzdem speichern?`)) return;
+    if (missing && !(await yesNo("Auswahl fehlt", `Bei ${missing} Baustein(en) fehlt noch eine Auswahl (⚠). Home Assistant lehnt das evtl. ab.`))) return;
+    // Wurde sie inzwischen woanders geändert (z. B. im HA-Editor)? Dann nicht still überschreiben.
+    if (!S.isNew) {
+      let now = null;
+      try { now = await api("GET", S.id); } catch (e) { now = null; }
+      if (now && !HAB.deepEqual(now, S.original)) {
+        const what = await askChoice("Inzwischen woanders geändert",
+          `Diese ${KIND_NAME()} wurde geändert, seit du sie hier geöffnet hast (z. B. im Home-Assistant-Editor oder in einem anderen Fenster). Speichern würde diese Änderungen überschreiben.`,
+          [["Abbrechen", null], ["Neu laden (meine Änderungen verwerfen)", "reload"], ["Trotzdem überschreiben", "overwrite", true]]);
+        if (what === "reload") { await load(S.id); status("Neu geladen – der aktuelle Stand aus Home Assistant.", "ok"); return; }
+        if (what !== "overwrite") return;
+      }
+    }
     $("save").disabled = true;
     status("Speichere …");
     try {
@@ -1241,7 +1288,7 @@
   }
 
   // ---------- Markierungen im Arbeitsbereich (Trace und Live) ----------
-  const OVERLAY = ["hab-run", "hab-skip", "hab-false", "hab-err", "hab-ltrue", "hab-lfalse"];
+  const OVERLAY = ["hab-run", "hab-skip", "hab-false", "hab-err", "hab-unknown", "hab-ltrue", "hab-lfalse"];
   function setCls(b, cls) {
     const g = b.getSvgRoot && b.getSvgRoot();
     if (!g) return;
@@ -1250,6 +1297,7 @@
   function stepClass(steps) {
     if (!steps || !steps.length) return "hab-skip";
     if (steps.some((x) => x && x.error)) return "hab-err";
+    if (steps.some((x) => x && x.unknown)) return "hab-unknown";
     const last = steps[steps.length - 1];
     if (last && isObj(last.result) && last.result.result === false) return "hab-false";
     return "hab-run";
@@ -1325,8 +1373,14 @@
     sel.appendChild(new Option(S.runs.length ? "– keine Markierung –" : !S.id ? "– nichts geöffnet –" : S.isNew ? "– erst speichern –" : "– noch kein Ablauf –", ""));
     for (const r of S.runs) sel.appendChild(new Option(runLabel(r), r.run_id));
     sel.value = (S.trace && S.trace.runId) || "";
+    renderDryOptions();
     const info = $("runInfo");
     if (S.runsErr) info.textContent = "Abläufe nicht lesbar: " + S.runsErr;
+    else if (S.trace && S.trace.dry) {
+      info.innerHTML = `<div><b>🧪 Trockenlauf</b> – ${esc(S.trace.label)}. Es wurde nichts ausgeführt.</div>` +
+        S.trace.log.map((x) => `<div>${esc(x)}</div>`).join("") +
+        '<div class="legend"><span class="lg run">würde laufen</span><span class="lg false">Bedingung jetzt nicht erfüllt</span><span class="lg unk">nicht prüfbar</span><span class="lg skip">nicht erreicht</span></div>';
+    }
     else if (S.trace && S.trace.run) {
       const r = S.trace.run;
       const parts = [];
@@ -1339,6 +1393,48 @@
     } else info.textContent = S.runs.length ? `${S.runs.length} gespeicherte Abläufe – einen wählen, um ihn im Baustein-Bild zu sehen.` : "";
     renderHints();
   }
+  // Trockenlauf: Auslöser zur Auswahl (bei Skripten keiner).
+  function renderDryOptions() {
+    const dsel = $("dryTrigger");
+    const cfg = rootBlock() ? currentConfig() : null;
+    const trigs = cfg && S.kind !== "script" ? [].concat(cfg.triggers || cfg.trigger || []) : [];
+    const keep = dsel.value;
+    dsel.innerHTML = "";
+    trigs.forEach((t, i) => {
+      let txt = "";
+      try { txt = HAB.hooks.describe("trigger", t) || ""; } catch (e) { txt = ""; }
+      dsel.appendChild(new Option(`${i + 1}. ${(isObj(t) && t.id ? "[" + t.id + "] " : "")}${txt || "Auslöser"}`.slice(0, 80), String(i)));
+    });
+    if (keep && [...dsel.options].some((o) => o.value === keep)) dsel.value = keep;
+    dsel.style.display = trigs.length ? "" : "none";
+    $("dryRun").disabled = !cfg;
+  }
+  const stateObj = (st) => (st ? { entity_id: st.entity_id, state: st.state, attributes: st.attributes, name: fname(st) || st.entity_id, last_changed: st.last_changed } : null);
+  async function runDry() {
+    const cfg = currentConfig();
+    if (!cfg) return;
+    const idx = Number($("dryTrigger").value || 0);
+    const t = S.kind === "script" ? null : [].concat(cfg.triggers || cfg.trigger || [])[idx];
+    const ent = t && (typeof t.entity_id === "string" ? t.entity_id : Array.isArray(t.entity_id) ? t.entity_id[0] : "");
+    const st = ent ? S.hass.states[ent] : null;
+    const trig = t ? { id: t.id !== undefined ? String(t.id) : String(idx), idx: String(idx), platform: t.trigger || t.platform, entity_id: ent || undefined,
+      to_state: stateObj(st), from_state: stateObj(st) } : undefined;
+    const vars = trig ? { trigger: trig } : {};
+    $("dryRun").disabled = true;
+    status("🧪 Trockenlauf läuft …");
+    try {
+      const res = await HAB.dryRun(cfg, rootKind(), async (c, v) => {
+        const r = await S.hass.callWS({ type: "test_condition", condition: c, variables: v });
+        return r && typeof r.result === "boolean" ? r.result : null;
+      }, { index: idx, id: trig ? trig.id : "", vars });
+      const label = t ? `angenommen: Auslöser ${idx + 1}${t.id ? " [" + t.id + "]" : ""}, Zustände von jetzt` : "mit den Zuständen von jetzt";
+      S.trace = { dry: true, steps: res.steps, log: res.log, label };
+      markMissing();
+      applyOverlay(); renderInsp(); renderDetail();
+      updateStatus();
+    } catch (e) { status("Trockenlauf fehlgeschlagen: " + errText(e), "warn"); }
+    $("dryRun").disabled = false;
+  }
   function renderHints() {
     const box = $("hints");
     if (!box || !inspOpen()) return;
@@ -1350,6 +1446,20 @@
       d.textContent = (h.level === "warn" ? "⚠ " : "💡 ") + h.msg;
       d.title = h.path ? "Zum Baustein springen" : "";
       d.addEventListener("click", () => { if (h.path) focusPath(h.path); });
+      if (h.fix) {
+        // Korrektur mit einem Klick (lässt sich mit ↶ rückgängig machen; gespeichert wird erst mit „Speichern“).
+        const b = document.createElement("button");
+        b.className = "fixBtn";
+        b.textContent = "🔧 " + h.fix.label;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const cfg = currentConfig();
+          if (!cfg) return;
+          try { reloadKeepingLayout(h.fix.apply(cfg)); status("Korrigiert: " + h.fix.label + " – noch nicht gespeichert", "ok"); }
+          catch (err) { status("Korrektur fehlgeschlagen: " + errText(err), "warn"); }
+        });
+        d.appendChild(b);
+      }
       box.appendChild(d);
     }
   }
@@ -1630,6 +1740,7 @@
   $("inspClose").addEventListener("click", () => $("insBtn").click());
   $("runs").addEventListener("change", (e) => showRun(e.target.value));
   $("runsReload").addEventListener("click", () => loadRuns());
+  $("dryRun").addEventListener("click", runDry);
   $("live").addEventListener("change", (e) => setLive(e.target.checked));
   $("xrefBtn").addEventListener("click", () => showXref(false));
   $("selfTestBtn").addEventListener("click", () => showSelfTest());

@@ -486,6 +486,85 @@ ok("skript-auslagern", () => {
   assert.strictEqual(p3.sequence[0].data.message, "{{ repeat_index }}");
 });
 
+// 24) Prüfregel „Entität gibt es nicht“ mit Korrekturen per Klick.
+ok("korrekturen", () => {
+  const HAV = HAB.HAV;
+  HAB.hooks.entityExists = (e) => ["light.flur", "binary_sensor.flur_bewegung"].includes(e);
+  HAB.hooks.entityIds = () => ["light.flur", "binary_sensor.flur_bewegung", "light.bad"];
+  try {
+    const tpl = HAV.compile({ k: "state", f: { e: "light.flr" } });
+    const cfg = {
+      triggers: [{ trigger: "state", entity_id: "binary_sensor.flur_bewegng", to: "on", id: "ruhe" }],
+      actions: [
+        { delay: { minutes: 1 } },
+        { if: [{ condition: "trigger", id: "ruh" }], then: [{ action: "light.turn_on", target: { entity_id: "light.flr" }, data: { a: "{{ is_state('light.flr', 'on') }}", b: tpl } }] },
+        { action: "light.turn_on", target: { entity_id: "light.gibtsnicht_ganz_anders" } },
+      ],
+    };
+    const hints = HAB.lint(cfg);
+    const msgs = hints.map((h) => h.msg).join(" | ");
+    assert.match(msgs, /binary_sensor\.flur_bewegng/);
+    assert.match(msgs, /light\.flr/);
+    assert.match(msgs, /gibtsnicht_ganz_anders/);
+    const noFix = hints.find((h) => /gibtsnicht/.test(h.msg));
+    assert.ok(!noFix.fix, "kein Vorschlag, wenn nichts Ähnliches existiert");
+    let c = cfg;
+    for (const h of hints) if (h.fix) c = h.fix.apply(c);
+    assert.strictEqual(c.triggers[0].entity_id, "binary_sensor.flur_bewegung");
+    assert.strictEqual(c.actions[1].if[0].id, "ruhe");
+    assert.strictEqual(c.actions[1].then[0].target.entity_id, "light.flur");
+    assert.strictEqual(c.actions[1].then[0].data.a, "{{ is_state('light.flur', 'on') }}");
+    assert.deepStrictEqual(HAV.decode(c.actions[1].then[0].data.b), { k: "state", f: { e: "light.flur" } });
+    assert.strictEqual(c.mode, "restart");
+    assert.deepStrictEqual(cfg.triggers[0].entity_id, "binary_sensor.flur_bewegng", "Original unverändert");
+    assert.deepStrictEqual(HAB.lint(c).map((h) => h.msg), [hints.find((h) => /gibtsnicht/.test(h.msg)).msg]);
+    // unbekannt (keine HA-Daten) -> keine Warnung
+    HAB.hooks.entityExists = () => null;
+    assert.ok(!HAB.lint(cfg).some((h) => /gibt es in Home Assistant nicht/.test(h.msg)));
+  } finally {
+    HAB.hooks.entityExists = () => null;
+    HAB.hooks.entityIds = () => [];
+  }
+});
+
+// 25) Trockenlauf: richtiger Weg, nicht prüfbare Bedingungen, Stopp bei NUR WENN.
+const dry = (async () => {
+  const cfg = {
+    triggers: [{ trigger: "state", entity_id: "a.b", id: "an" }, { trigger: "state", entity_id: "a.b", id: "aus" }],
+    conditions: [{ condition: "state", entity_id: "x.y", state: "on" }],
+    actions: [
+      { choose: [
+        { conditions: [{ condition: "trigger", id: "an" }], sequence: [{ action: "light.turn_on" }] },
+        { conditions: [{ condition: "trigger", id: "aus" }], sequence: [{ action: "light.turn_off" }, { delay: 5 }] },
+      ], default: [{ action: "x.y" }] },
+      { if: [{ condition: "template", value_template: "{{ x }}" }], then: [{ action: "a.a" }], else: [{ action: "b.b" }] },
+      { condition: "state", entity_id: "z.z", state: "off" },
+      { action: "nie.erreicht" },
+    ],
+  };
+  const test = async (c) => (c.condition === "template" ? null : c.entity_id !== "z.z");
+  let r = await HAB.dryRun(cfg, "root", test, { index: 1, id: "aus" });
+  const k = Object.keys(r.steps);
+  assert.ok(k.includes("trigger/1") && !k.includes("trigger/0"));
+  assert.ok(k.includes("action/0/choose/1/sequence/1") && !k.includes("action/0/choose/0/sequence/0") && !k.includes("action/0/default/0"));
+  assert.deepStrictEqual(r.steps["action/1/if/0"], [{ unknown: true }]);
+  assert.ok(k.includes("action/1/then/0") && !k.includes("action/1/else/0"));
+  assert.deepStrictEqual(r.steps["action/2"], [{ result: { result: false } }]);
+  assert.ok(!k.includes("action/3"), "nach falscher Bedingung ist Schluss");
+  assert.ok(r.log.some((x) => /warten/.test(x)));
+  // NUR WENN nicht erfüllt -> keine Aktionen
+  r = await HAB.dryRun(cfg, "root", async () => false, { index: 0, id: "an" });
+  assert.ok(!Object.keys(r.steps).some((p) => p.startsWith("action/")));
+  // Pfade passen zu den Blöcken
+  const paths = new Set(HAB.collectPaths(toBlocks(cfg)).keys());
+  r = await HAB.dryRun(cfg, "root", async () => true, { index: 0, id: "an" });
+  for (const p of Object.keys(r.steps)) assert.ok(paths.has(p), `Pfad ${p} gibt es als Baustein`);
+  // Skript
+  r = await HAB.dryRun({ sequence: [{ action: "a.a" }, { stop: "fertig" }, { action: "b.b" }] }, "script", async () => true);
+  assert.deepStrictEqual(Object.keys(r.steps), ["sequence/0", "sequence/1"]);
+  n++;
+})();
+
 // 13) Versionsnummern stimmen überein (manifest, package.json, version.json).
 ok("version", () => {
   const read = (...p) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", ...p), "utf8")).version;
@@ -494,4 +573,4 @@ ok("version", () => {
   assert.strictEqual(read("custom_components", "blockly_automations", "www", "version.json"), m);
 });
 
-console.log(`OK – ${n} Prüfungen bestanden`);
+dry.then(() => console.log(`OK – ${n} Prüfungen bestanden`)).catch((e) => { console.error(e); process.exit(1); });

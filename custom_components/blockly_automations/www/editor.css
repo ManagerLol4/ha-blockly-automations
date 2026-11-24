@@ -190,3 +190,8 @@ body.expert #expert { background: var(--accent); color: #fff; border-color: var(
 .askFoot { display: flex; gap: 8px; justify-content: flex-end; }
 /* YAML-Ansicht im Inspektor */
 details.yaml summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-top: 6px; }
+
+/* Trockenlauf und Korrekturen */
+.hab-unknown > .blocklyPath { stroke: #ffd600 !important; stroke-width: 4px !important; stroke-dasharray: 5 3; }
+.lg.unk::before { border-color: #ffd600; border-style: dashed; }
+.fixBtn { display: block; margin-top: 4px; font-size: 12px; padding: 3px 8px; }
