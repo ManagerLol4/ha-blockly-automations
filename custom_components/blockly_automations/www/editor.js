@@ -789,6 +789,11 @@
           setTimeout(() => { if (!b.isDisposed()) replaceBlock(b, HAB.blockToItem(b)); }, 0);
         }
       }
+      // Version B: Auswahl, die den Baustein umbaut (z. B. „Falls … wird zu“ braucht ein Wertfeld).
+      if (e.type === Blockly.Events.BLOCK_CHANGE && e.element === "field" && !S.busy) {
+        const b = S.ws.getBlockById(e.blockId);
+        if (b && (b.fieldMap_ || []).some((x) => x.name === e.name && x.rebuild)) setTimeout(() => { if (!b.isDisposed()) replaceBlock(b, HAB.blockToItem(b)); }, 0);
+      }
       // Name in der Kopfzeile mitführen.
       if (e.type === Blockly.Events.BLOCK_CHANGE && !S.busy) updateTitle();
     });
@@ -1307,6 +1312,17 @@
   }
   const slugify = (name) => name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "skript";
+  // Version B: „＋“ am Baustein – ausgeblendete Angaben (Helligkeit, Übergang, Bereich, für …) hinzufügen.
+  HAB.hooks.addOptional = async (block, opts) => {
+    const choice = await askChoice("Angabe hinzufügen", "Welche Angabe soll der Baustein bekommen? Leer gelassene Angaben werden nicht gespeichert.",
+      [...opts.map((o, i) => [o.label, String(i), i === 0]), ["Abbrechen", null]]);
+    if (choice === null || block.isDisposed()) return;
+    const o = opts[Number(choice)];
+    const item = HAB.blockToItem(block);
+    HAB.setPath(item, o.path, o.dur ? { hours: 0, minutes: 0, seconds: 0 } : "");
+    replaceBlock(block, item);
+  };
+
   // Version B: Timer = Helfer „timer“. Danach liegen „Timer starten“ und „Timer abgelaufen“ bereit.
   async function newTimer() {
     const name = ((await askText("Name des neuen Timers", "", "z. B. „Licht Flur aus“")) || "").trim();

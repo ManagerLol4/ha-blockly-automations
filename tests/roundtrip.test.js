@@ -543,6 +543,97 @@ ok("version-b-katalog-parameter", () => {
   assert.ok(!HAB.typeCatalog("action", []).some((g) => g.group === "Variablen"));
 });
 
+// 20g) Version B: universelle Bausteine wie ioBroker (steuere, umschalten, Falls) und „＋“.
+ok("version-b-system", () => {
+  HAB.hooks.extended = true;
+  const HAV = HAB.HAV;
+  const title = (x, k = "action") => toBlocks(x, k).getFieldValue("TITLE");
+  const virtField = (b, p) => b.fieldMap_.find((x) => x.path === p).name;
+  try {
+    // Erkennen und verlustfrei
+    const acts = [
+      { action: "light.turn_on", target: { entity_id: "light.flur" } },
+      { action: "light.turn_off", target: { entity_id: "light.flur" } },
+      { action: "light.turn_on", target: { entity_id: "light.flur" }, data: { brightness_pct: 40 } },
+      { action: "cover.set_cover_position", target: { entity_id: "cover.wz" }, data: { position: 30 } },
+      { action: "climate.set_hvac_mode", target: { entity_id: "climate.bad" }, data: { hvac_mode: "heat" } },
+      { alias: "x", action: "switch.turn_on", target: { entity_id: "switch.a" }, enabled: false },
+    ];
+    for (const a of acts) {
+      assert.ok(title(a).includes("steuere"), JSON.stringify(a));
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(a, "action")), a);
+    }
+    // Nicht erkannt (mehr Angaben) -> normaler Dienst-Baustein
+    assert.ok(!title({ action: "light.turn_on", target: { entity_id: "light.a" }, data: { brightness_pct: 40, transition: 2 } }).includes("steuere"));
+    // Wert ändern: an -> 70 -> aus
+    let b = toBlocks(acts[0], "action");
+    b.setFieldValue("70", virtField(b, "__x.val"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { action: "light.turn_on", target: { entity_id: "light.flur" }, data: { brightness_pct: 70 } });
+    b = toBlocks(acts[2], "action");
+    b.setFieldValue("aus", virtField(b, "__x.val"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { action: "light.turn_off", target: { entity_id: "light.flur" } });
+    // Entität wechseln (anderes Gerät): Dienst passt sich an
+    b = toBlocks(acts[0], "action");
+    b.setFieldValue("cover.wz", virtField(b, "target.entity_id"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { action: "cover.open_cover", target: { entity_id: "cover.wz" } });
+    // Wert-Baustein eingesteckt (Template) -> Zahl-Dienst
+    const tpl = HAV.compile({ k: "valof", f: { w: "num", e: "input_number.h" } });
+    const ta = { action: "light.turn_on", target: { entity_id: "light.flur" }, data: { brightness_pct: tpl } };
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(ta, "action")), ta);
+    // umschalten
+    const tg = { action: "light.toggle", target: { entity_id: "light.flur" } };
+    assert.ok(title(tg).includes("umschalten"));
+    b = toBlocks(tg, "action");
+    b.setFieldValue("lock.tuer", virtField(b, "target.entity_id"));
+    assert.strictEqual(HAB.blockToItem(b).action, "homeassistant.toggle");
+    // Falls
+    const trigs = [
+      { trigger: "state", entity_id: "binary_sensor.tuer", to: null },
+      { trigger: "state", entity_id: "binary_sensor.tuer" },
+      { trigger: "state", entity_id: ["binary_sensor.a", "binary_sensor.b"], to: "on", id: "auf" },
+      { trigger: "numeric_state", entity_id: "sensor.t", above: 25 },
+      { trigger: "numeric_state", entity_id: "sensor.t", below: 5 },
+    ];
+    for (const t of trigs) {
+      assert.ok(title(t, "trigger").includes("Falls"), JSON.stringify(t));
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(t, "trigger")), t);
+    }
+    assert.ok(!title({ trigger: "state", entity_id: "a.b", to: "on", for: { minutes: 1 } }, "trigger").includes("Falls"));
+    b = toBlocks(trigs[0], "trigger");
+    b.setFieldValue("above", virtField(b, "__x.cond"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { trigger: "numeric_state", entity_id: "binary_sensor.tuer", above: 0 });
+    b = toBlocks(trigs[3], "trigger");
+    b.setFieldValue("30", virtField(b, "__x.val"));
+    assert.deepStrictEqual(HAB.blockToItem(b), { trigger: "numeric_state", entity_id: "sensor.t", above: 30 });
+    // Nur ausgefüllte Felder: Licht-Dienst mit Schema zeigt keine leeren data-Felder
+    const prevF = HAB.hooks.serviceFields;
+    HAB.hooks.serviceFields = (svc) => (svc === "light.turn_on" ? { transition: { name: "Übergang", selector: { number: {} } }, brightness_pct: { name: "Helligkeit", selector: { number: {} } } } : null);
+    try {
+      const svcA = { action: "light.turn_on", target: { entity_id: "light.a", area_id: "x" }, data: { transition: 2 } };
+      const sb = toBlocks(svcA, "action");
+      const paths = sb.fieldMap_.map((x) => x.path);
+      assert.ok(paths.includes("data.transition") && !paths.includes("data.brightness_pct"));
+      assert.ok(sb.getField("PLUS") === null || sb.getField("PLUS") !== undefined);
+      assert.deepStrictEqual(HAB.blockToItem(sb), svcA);
+      // „＋“ hinzugefügt, aber leer gelassen -> nicht gespeichert
+      const withEmpty = { ...svcA, data: { transition: 2, brightness_pct: "" } };
+      assert.deepStrictEqual(HAB.blockToItem(toBlocks(withEmpty, "action")), svcA);
+    } finally { HAB.hooks.serviceFields = prevF; }
+    // Teilweise gesetzte Dauer: alle Einheiten sichtbar, nichts im „＋“-Menü
+    const fd = toBlocks({ trigger: "state", entity_id: "a.b", to: "off", for: { minutes: 2 } }, "trigger");
+    assert.ok(["for.hours", "for.minutes", "for.seconds"].every((p) => fd.fieldMap_.some((x) => x.path === p)));
+    // Neue Werte
+    assert.strictEqual(HAV.expr({ k: "valof", f: { w: "on", e: "light.a" } }), "is_state('light.a', 'on')");
+    assert.strictEqual(HAV.expr({ k: "timebw", f: { a: "22:00", b: "06:00" } }), "now() >= today_at('22:00') or now() < today_at('06:00')");
+    assert.strictEqual(HAV.expr({ k: "timebw", f: { a: "08:00", b: "22:00" } }), "today_at('08:00') <= now() < today_at('22:00')");
+    // Werkzeugkasten: System vorne
+    assert.strictEqual(HAB.buildToolbox("root").contents.filter((c) => c.kind === "category")[0].name, "System");
+  } finally { HAB.hooks.extended = false; }
+  // Version A: unverändert normale Bausteine
+  assert.ok(!toBlocks({ action: "light.turn_on", target: { entity_id: "light.flur" } }, "action").getFieldValue("TITLE").includes("steuere"));
+  assert.ok(!toBlocks({ trigger: "state", entity_id: "a.b", to: null }, "trigger").getFieldValue("TITLE").includes("Falls"));
+});
+
 // 21) Wert-Bausteine: Template erzeugen, wieder einlesen, ändern, entfernen.
 ok("wert-bausteine", () => {
   const HAV = HAB.HAV;

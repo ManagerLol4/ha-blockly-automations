@@ -32,7 +32,30 @@
     attr: { c: 30, parts: [["t", "Attribut"], ["f", "a", "attribute", ""], ["t", "von"], ["f", "e", "entity", ""]], j: (f) => `state_attr(${q(f.e)}, ${q(f.a)})` },
     isstate: { c: 210, parts: [["f", "e", "entity", ""], ["t", "ist"], ["f", "s", "state", ""]], j: (f) => `is_state(${q(f.e)}, ${q(f.s)})` },
     trig: { c: 30, parts: [["t", "Auslöser:"], ["f", "w", "dd", "trigger.id", [["ID", "trigger.id"], ["neuer Zustand", "trigger.to_state.state"],
-      ["alter Zustand", "trigger.from_state.state"], ["Entität", "trigger.entity_id"], ["Name", "trigger.to_state.name"]]]], j: (f) => f.w },
+      ["alter Zustand", "trigger.from_state.state"], ["Entität", "trigger.entity_id"], ["Name", "trigger.to_state.name"],
+      ["neuer Zustand als Zahl", "trigger.to_state.state | float(0)"], ["Zeitpunkt", "trigger.to_state.last_changed"]]]], j: (f) => f.w },
+    // Wie ioBroker „Zustandswert nehmen [Wert ▾] vom Objekt …“
+    valof: { c: 30, parts: [["f", "w", "dd", "state", [["Wert", "state"], ["Zahl", "num"], ["ist an", "on"], ["Name", "name"], ["letzte Änderung", "lc"], ["Minuten seit Änderung", "since"]]],
+      ["t", "von"], ["f", "e", "entity", ""]],
+      j: (f) => {
+        const e = q(f.e);
+        switch (f.w) {
+          case "num": return `states(${e}) | float(0)`;
+          case "on": return `is_state(${e}, 'on')`;
+          case "name": return `state_attr(${e}, 'friendly_name')`;
+          case "lc": return `states[${e}].last_changed if states[${e}] is defined else none`;
+          case "since": return `((now() - states[${e}].last_changed).total_seconds() / 60) | round(1) if states[${e}] is defined else 0`;
+          default: return `states(${e})`;
+        }
+      } },
+    // Wie ioBroker „Aktuelle Zeit ist zwischen … und …“ (auch über Mitternacht).
+    timebw: { c: 210, parts: [["t", "Uhrzeit ist zwischen"], ["f", "a", "text", "08:00"], ["t", "und"], ["f", "b", "text", "22:00"]],
+      j: (f) => {
+        const ok = (x) => /^\d{1,2}:\d{2}(:\d{2})?$/.test(String(x || ""));
+        if (!ok(f.a) || !ok(f.b)) return "false";
+        const a = `today_at(${q(f.a)})`, b = `today_at(${q(f.b)})`;
+        return String(f.a) <= String(f.b) ? `${a} <= now() < ${b}` : `now() >= ${a} or now() < ${b}`;
+      } },
     gvar: { c: 330, parts: [["t", "globale Variable"], ["f", "e", "entity", "", null, { domains: ["input_number", "input_text", "input_boolean"] }]],
       j: (f) => { const d = String(f.e || "").split(".")[0]; return d === "input_number" ? `states(${q(f.e)}) | float(0)` : d === "input_boolean" ? `is_state(${q(f.e)}, 'on')` : `states(${q(f.e)})`; } },
     fres: { c: 290, parts: [["t", "Ergebnis von"], ["f", "v", "variable", "ergebnis"]], j: (f) => (IDENT.test(f.v || "") ? `${f.v}.wert` : "none") },

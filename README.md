@@ -48,6 +48,13 @@ Beide speichern dieselbe native HA-Automation; man kann jederzeit umschalten.
 
 - **Version A (Standard):** Bausteine zeigen genau das, was in der HA-Automation steht.
 - **Version B:** zusätzlich Bausteine wie bei ioBroker:
+  - **System** (ganz vorne, wie bei ioBroker): *🎛️ steuere [Entität] mit [Wert]* für alle Geräte
+    (an/aus, Zahl, Text oder ein Wert-Baustein – wird zum passenden Dienst: Licht an/aus/Helligkeit,
+    Rollladen auf/zu/Position, Heizung Temperatur/Modus …), *🔀 umschalten*, *⚡ Falls [Entität]
+    [ändert sich ▾ / wird aktualisiert / wird zu / steigt über / fällt unter]*, *[Wert ▾] von [Entität]*,
+    *Uhrzeit ist zwischen … und …*. Bestehende Automationen werden automatisch so angezeigt, wo die Form passt.
+  - **Nur ausgefüllte Angaben:** Leere optionale Felder (Helligkeit, Übergang, Bereich, für …) sind
+    ausgeblendet und kommen über das **＋** am Baustein dazu.
   - **Globale Variablen:** Unter
     *Variablen → ＋ Neue globale Variable anlegen …* legt Blockly einen Helfer an (Zahl, Text oder
     Wahr/Falsch). Er behält seinen Wert auch nach einem Neustart. Dazu gibt es die Bausteine
