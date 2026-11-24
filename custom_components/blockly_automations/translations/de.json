@@ -15,5 +15,27 @@
       "title": "Blockly Automations: Neustart erforderlich",
       "description": "Version {version} wurde installiert und enthält Änderungen, die erst nach einem Neustart von Home Assistant wirken. Starte Home Assistant bei Gelegenheit neu (Einstellungen → System → Neu starten). Der Editor selbst nutzt die neue Version bereits."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Einstellungen Blockly Automations",
+        "description": "Lege fest, wie Bausteine bearbeitet werden.",
+        "data": {
+          "ui_mode": "Bedienung"
+        },
+        "data_description": {
+          "ui_mode": "Home-Assistant-Fenster: Werte werden in den originalen HA-Auswahlfenstern gewählt (empfohlen für Einsteiger). Blockly-Bausteine: alles wird direkt im Baustein eingestellt – mit durchsuchbaren Listen, allen Diensten und Geräte-Bausteinen im Werkzeugkasten, wie im Blockly-Editor von ioBroker."
+        }
+      }
+    }
+  },
+  "selector": {
+    "ui_mode": {
+      "options": {
+        "ha": "Home-Assistant-Auswahlfenster",
+        "blockly": "Blockly-Bausteine"
+      }
+    }
   }
 }

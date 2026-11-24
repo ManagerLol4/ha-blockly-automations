@@ -38,6 +38,16 @@ case "zone":
 
 Alles, was nicht als Feld oder Liste beschrieben ist, bleibt automatisch unverändert erhalten.
 
+## Blockly-Modus
+
+Einstellung `ui_mode` (`ha` | `blockly`) kommt aus dem Options-Flow (`config_flow.py`) über die
+Panel-Konfiguration in den Editor (`parent.__haBlocklyConfig`; zum Testen auch `?ui=blockly`).
+Im Blockly-Modus ist `HAB.hooks.blockly` gesetzt: Felder vom Typ `entity`, `state`, `service`,
+`area`, `device`, `floor`, `time`, `triggerid` und `devauto` werden zu `FieldPicker` (Auswahlliste
+mit Suche im Blockly-Dropdown). Die Einträge liefert `hooks.options(type, field)` in `editor.js`.
+Neue Auswahl-Arten: Typ in `PICKER` (ha_blocks.js) eintragen und in `hooks.options`/`hooks.optionLabel`
+ergänzen. Test-Seite: `tests/dev/mock.html?ui=blockly`.
+
 ## Neue Prüfregel hinzufügen
 
 In `lint()` in `ha_blocks.js`: `walkConfig` liefert jedes Element mit Art und Pfad

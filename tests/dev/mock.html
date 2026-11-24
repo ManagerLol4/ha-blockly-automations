@@ -63,7 +63,11 @@
   const layouts = {};
   const svc = (fields = {}, target = { entity: {} }) => ({ fields, target });
   const hass = {
-    states, user: { is_admin: true }, themes: { darkMode: false }, areas: {}, devices: {}, floors: {},
+    states, user: { is_admin: true }, themes: { darkMode: false },
+    floors: { eg: { floor_id: "eg", name: "Erdgeschoss" } },
+    areas: { flur: { area_id: "flur", name: "Flur", floor_id: "eg" }, bad: { area_id: "bad", name: "Bad", floor_id: "eg" } },
+    devices: { dev1: { id: "dev1", name: "Taster Flur", area_id: "flur", manufacturer: "IKEA", model: "E1743" } },
+    entities: { "light.flur": { entity_id: "light.flur", area_id: "flur" }, "binary_sensor.bad_fenster": { entity_id: "binary_sensor.bad_fenster", area_id: "bad" } },
     services: {
       light: { turn_on: svc({ brightness_pct: { selector: { number: { min: 0, max: 100 } } } }), turn_off: svc() },
       persistent_notification: { create: svc({ title: { selector: { text: {} } }, message: { selector: { text: {} } } }, null) },
@@ -87,6 +91,11 @@
         case "config/category_registry/list": return msg.scope === "automation" ? [{ category_id: "c1", name: "Licht" }] : [];
         case "config/entity_registry/get_entries": return { "automation.licht_flur": { categories: { automation: "c1" } }, "script.licht_szene": { unique_id: "licht_szene", categories: {} } };
         case "blueprint/list": return {};
+        case "device_automation/trigger/list": return msg.device_id === "dev1" ? [
+          { platform: "device", device_id: "dev1", domain: "zha", type: "remote_button_short_press", subtype: "turn_on", metadata: {} },
+          { platform: "device", device_id: "dev1", domain: "zha", type: "remote_button_long_press", subtype: "turn_off", metadata: {} },
+        ] : [];
+        case "device_automation/condition/list": case "device_automation/action/list": return [];
         case "trace/list": return (traces[`${msg.domain}/${msg.item_id}`] || []).map(({ trace, ...r }) => r);
         case "trace/get": return { ...(traces[`${msg.domain}/${msg.item_id}`] || []).find((t) => t.run_id === msg.run_id), config: configs[`${msg.domain}/${msg.item_id}`] };
         case "test_condition": {
@@ -103,7 +112,10 @@
     connection: { subscribeMessage: (cb, msg) => { setTimeout(() => cb({ result: "(Test) " + msg.template.slice(0, 40) }), 50); return Promise.resolve(() => {}); } },
   };
   window.__mock = { hass, configs, layouts };
-  document.getElementById("f").src = "../../custom_components/blockly_automations/www/editor.html?v=dev" + Date.now();
+  // ?ui=blockly zeigt den Blockly-Modus (sonst HA-Auswahlfenster).
+  const ui = new URLSearchParams(location.search).get("ui") || "ha";
+  window.__haBlocklyConfig = { ui_mode: ui };
+  document.getElementById("f").src = "../../custom_components/blockly_automations/www/editor.html?v=dev" + Date.now() + "&ui=" + ui;
   document.getElementById("f").addEventListener("load", () => {
     const w = document.getElementById("f").contentWindow;
     const go = () => (w.haBlockly ? w.haBlockly.setHass(hass) : setTimeout(go, 50));

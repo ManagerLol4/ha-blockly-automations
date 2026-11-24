@@ -85,6 +85,12 @@
     scripts: () => [],           // () -> [["script.x", "Name"], ...] für den Werkzeugkasten
     renameBlock: null,           // (block) -> Name (alias) eines Schritts setzen
     editScriptFields: null,      // (block) -> Eingaben eines Skripts bearbeiten
+    blockly: false,              // Blockly-Modus: alles im Baustein, eigene Auswahllisten statt HA-Dialoge
+    expert: false,               // Expertenmodus (JSON-Seitenleiste, Roh-JSON-Bausteine)
+    options: () => [],           // (type, ctx) -> [[wert, anzeige, gruppe?, hinweis?]] oder Promise davon
+    optionLabel: () => "",       // (type, wert, ctx) -> Anzeige eines gewählten Werts
+    deviceEntry: () => null,     // (schlüssel) -> vollständiger Eintrag einer Geräte-Automation
+    domainName: (d) => d,        // ("light") -> "Licht"
   };
 
   // Einfach-Modus: welche Optionen eines Bausteins als anklickbare Werte erscheinen.
@@ -224,7 +230,7 @@
       case "persistent_notification":
         return mk("🔔 Benachrichtigung", [F("notification_id", "ID"), P("update_type", "Art", { type: "json" })]);
       case "device":
-        return mk(`📟 Gerät: ${t.type || ""}${t.subtype !== undefined ? " " + t.subtype : ""} (${t.domain || ""})`, [], C.trigger, { summaryLine: false });
+        return mk(deviceTitle(t), deviceFields("trigger"), C.trigger, { summaryLine: false });
       default:
         return mk(`Auslöser: ${p}`, [], C.generic, { generic: true });
     }
@@ -281,7 +287,7 @@
       case "not":
         return mk("NICHT – keine erfüllt", [], [L("conditions", "", "condition")], C.flow);
       case "device":
-        return mk(`📟 Gerät: ${c.type || ""} (${c.domain || ""})`, []);
+        return mk(deviceTitle(c), deviceFields("condition"));
       default:
         return { ...mk(`Bedingung: ${c.condition}`, []), colour: C.generic, generic: true };
     }
@@ -299,7 +305,8 @@
     } else if (t === "entity") { o.type = "entity"; if (sel.entity && sel.entity.domain) o.domains = [].concat(sel.entity.domain); }
     else if (t === "template") o.type = "template";
     else if (t === "duration") o.type = "json";
-    else if (["object", "color_rgb", "area", "device", "media"].includes(t)) o.type = "json";
+    else if (t === "area" || t === "device" || t === "floor") o.type = t;
+    else if (["object", "color_rgb", "media"].includes(t)) o.type = "json";
     else if (t === "time") o.type = "time";
     return F(path, label, { ...o, sel });
   }
@@ -320,6 +327,13 @@
     // Bereits befüllte Felder immer anzeigen, auch wenn sie im Schema in einem Abschnitt stecken.
     return fields.map((f) => (getPath(a, f.path) !== undefined ? { ...f, show: "always" } : f));
   }
+
+  const hasTargetFor = (a, key) => (typeof a[key] === "string" && a[key] ? hooks.serviceTarget(a[key]) : null);
+  // Geräte-Auslöser/-Bedingungen/-Aktionen: im Blockly-Modus Gerät und Art direkt wählbar.
+  const deviceFields = (kind) => (hooks.blockly
+    ? [F("device_id", "Gerät", { type: "device" }), F("__devauto", kind === "trigger" ? "Auslöser" : kind === "condition" ? "Bedingung" : "Aktion", { type: "devauto", kind })]
+    : []);
+  const deviceTitle = (x) => (hooks.blockly ? "📟 Gerät" : `📟 Gerät: ${x.type || ""}${x.subtype !== undefined ? " " + x.subtype : ""} (${x.domain || ""})`);
 
   function actionSpec(a) {
     const mk = (title, fields, lists = [], colour = C.action) => ({ title, colour, fields, lists });
@@ -363,8 +377,12 @@
         const hasTarget = typeof svc === "string" ? hooks.serviceTarget(svc) : null;
         fields.push(F("target.entity_id", "Entität", { type: "entity", domains, show: hasTarget === false ? "present" : "always" }));
       }
-      fields.push(P("target.area_id", "Bereich", { type: "list" }));
-      fields.push(P("target.device_id", "Gerät", { type: "list" }));
+      // Im Blockly-Modus sind Bereich und Gerät immer wählbar; sonst nur, wenn gesetzt.
+      const tShow = hooks.blockly && (hasTargetFor(a, key) !== false) ? "always" : "present";
+      fields.push(F("target.area_id", "Bereich", { type: "area", show: tShow }));
+      fields.push(F("target.device_id", "Gerät", { type: "device", show: tShow }));
+      fields.push(P("target.floor_id", "Etage", { type: "floor" }));
+      fields.push(P("target.label_id", "Label", { type: "list" }));
       if (typeof svc === "string") fields.push(...serviceDataFields(a, svc));
       else if (isObj(a.data)) fields.push(F("data", "Daten (JSON)", { type: "json" }));
       fields.push(P("data_template", "Daten (alt)", { type: "json" }));
@@ -376,7 +394,7 @@
     if ("stop" in a) return mk("⛔ Stopp", [F("stop", "Grund"), F("error", "als Fehler", { type: "bool" })], [], C.flow);
     if ("variables" in a && isObj(a.variables))
       return mk("📦 Variablen setzen", Object.keys(a.variables).map((k) => F(`variables.${k}`, k, { type: isPrim(a.variables[k]) ? "text" : "json" })), [], C.flow);
-    if ("device_id" in a) return mk(`📟 Gerät: ${a.type || ""} (${a.domain || ""})`, []);
+    if ("device_id" in a) return mk(deviceTitle(a), deviceFields("action"));
     return { ...mk("Aktion (unbekannt)", []), colour: C.generic, generic: true };
   }
 
@@ -430,7 +448,7 @@
     return {
       title: "📜 Skript (Funktion)",
       colour: C.script,
-      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"), P("fields", "Eingaben (JSON)", { type: "json" })],
+      fields: [F("alias", "Name"), F("description", "Beschreibung"), ...MODE_FIELDS(cfg), P("icon", "Symbol"), F("fields", "Eingaben (JSON)", { type: "json", show: hooks.blockly ? "always" : "present" })],
       lists: [L("sequence", "ABLAUF", "action")],
     };
   }
@@ -453,6 +471,8 @@
   }
 
   const ROOTS = new Set(["root", "script"]);
+  // Schlüssel einer Geräte-Automation (welche Art bei welchem Gerät).
+  const devKey = (x) => (isObj(x) && (x.domain || x.type) ? JSON.stringify([x.domain || "", x.type || "", x.subtype === undefined ? "" : x.subtype, x.entity_id || ""]) : "");
   const classify = (listKind, el) => (listKind === "action" && isObj(el) && "condition" in el ? "condition" : listKind);
   const CHECK_PREV = { trigger: "ha_trigger", condition: "ha_condition", action: "ha_action", option: "ha_option" };
   const CHECK_LIST = { trigger: ["ha_trigger"], condition: ["ha_condition"], action: ["ha_action", "ha_condition"], option: ["ha_option"] };
@@ -482,7 +502,7 @@
   }
 
   // ---------- Feldwerte <-> HA-Werte ----------
-  const LISTY = new Set(["entity", "state", "list", "triggerid"]);
+  const LISTY = new Set(["entity", "state", "list", "triggerid", "area", "device", "floor"]);
   function toFieldString(v, f) {
     if (v === undefined) return "";
     if (Array.isArray(v) && LISTY.has(f.type) && v.every(isPrim)) return v.join(", ");
@@ -508,6 +528,21 @@
   function blockToItem(b) {
     let out = clone(b.raw_);
     for (const f of b.fieldMap_ || []) {
+      if (f.type === "devauto") {
+        const val = b.getFieldValue(f.name);
+        if (!val || val === f.origStr || !isObj(out)) continue;
+        const e = hooks.deviceEntry(val);
+        if (!isObj(e)) continue;
+        const keep = {};
+        for (const k of ["alias", "id", "enabled", "continue_on_error"]) if (out[k] !== undefined) keep[k] = out[k];
+        const dev = out.device_id;
+        const ent = clone(e);
+        delete ent.metadata;
+        if (ent.platform !== undefined && ent.trigger === undefined && isObj(b.raw_) && "trigger" in b.raw_) { ent.trigger = ent.platform; delete ent.platform; }
+        out = { ...keep, ...ent };
+        if (dev) out.device_id = dev;
+        continue;
+      }
       if (f.type === "weekdays") {
         const sel = WEEKDAYS.map(([d]) => d).filter((d, i) => b.getFieldValue(`${f.name}_${i}`) === "TRUE");
         const origArr = f.orig === undefined ? [] : [].concat(f.orig);
@@ -599,6 +634,127 @@
       }
     }
 
+    /* Auswahlfeld mit Suche (Blockly-Modus): zeigt den Namen, speichert den Wert.
+     * Liste im Blockly-Dropdown: Suchfeld, gruppierte Einträge, bei Listen Mehrfachauswahl.
+     * Freitext (z. B. Templates) mit Enter übernehmen. */
+    class FieldPicker extends Blockly.FieldTextInput {
+      constructor(value, def) {
+        super(value);
+        this.def_ = def;
+      }
+      getText_() {
+        const v = this.getValue();
+        if (v === null || v === undefined || v === "") return this.def_.placeholder || "⚠ wählen …";
+        const parts = this.def_.multi ? String(v).split(",").map((x) => x.trim()).filter(Boolean) : [String(v)];
+        const names = parts.map((x) => { try { return hooks.optionLabel(this.def_.type, x, this) || x; } catch (e) { return x; } });
+        const txt = names.join(", ");
+        return txt.length > 48 ? txt.slice(0, 47) + "…" : txt;
+      }
+      showEditor_() {
+        const b = this.getSourceBlock();
+        if (!b || b.isInFlyout) return;
+        const field = this;
+        const def = this.def_;
+        // Ein noch offenes (oder gerade ausblendendes) Auswahlfenster sofort schließen.
+        try { Blockly.DropDownDiv.hideWithoutAnimation(); } catch (e) { /* nichts offen */ }
+        const closePicker = () => { try { Blockly.DropDownDiv.hideWithoutAnimation(); } catch (e) { Blockly.DropDownDiv.hideIfOwner(field); } };
+        Blockly.DropDownDiv.clearContent();
+        const div = Blockly.DropDownDiv.getContentDiv();
+        const box = document.createElement("div");
+        box.className = "hab-picker";
+        const input = document.createElement("input");
+        input.type = "search";
+        input.placeholder = def.free ? "Suchen oder eigenen Wert eingeben + Enter" : "Suchen …";
+        const list = document.createElement("div");
+        list.className = "hab-plist";
+        const foot = document.createElement("div");
+        foot.className = "hab-pfoot";
+        const clear = document.createElement("button");
+        clear.textContent = "Leeren";
+        foot.appendChild(clear);
+        const info = document.createElement("span");
+        foot.appendChild(info);
+        if (def.multi) {
+          const done = document.createElement("button");
+          done.textContent = "Fertig";
+          done.className = "primary";
+          done.addEventListener("click", () => closePicker());
+          foot.appendChild(done);
+        }
+        box.append(input, list, foot);
+        div.appendChild(box);
+        let items = [];
+        const selected = () => (def.multi ? String(field.getValue() || "").split(",").map((x) => x.trim()).filter(Boolean) : [String(field.getValue() || "")]);
+        const setVal = (v) => field.setValue(v);
+        const pick = (val) => {
+          if (!def.multi) { setVal(val); closePicker(); return; }
+          const cur = selected();
+          const i = cur.indexOf(val);
+          if (i >= 0) cur.splice(i, 1); else cur.push(val);
+          setVal(cur.join(", "));
+          render();
+        };
+        const render = () => {
+          const q = input.value.trim().toLowerCase();
+          const sel = selected();
+          list.innerHTML = "";
+          const shown = items.filter((o) => !q || String(o[0]).toLowerCase().includes(q) || String(o[1] || "").toLowerCase().includes(q) || String(o[2] || "").toLowerCase().includes(q));
+          let lastGroup = null;
+          for (const o of shown.slice(0, 300)) {
+            if (o[2] && o[2] !== lastGroup) {
+              lastGroup = o[2];
+              const g = document.createElement("div");
+              g.className = "hab-pgroup";
+              g.textContent = o[2];
+              list.appendChild(g);
+            }
+            const it = document.createElement("div");
+            it.className = "hab-pitem" + (sel.includes(String(o[0])) ? " sel" : "");
+            const n = document.createElement("span");
+            n.textContent = (def.multi ? (sel.includes(String(o[0])) ? "☑ " : "☐ ") : "") + (o[1] || o[0]);
+            it.appendChild(n);
+            const hint = o.length > 3 ? o[3] : o[0];
+            if (hint && o[1] && hint !== o[1]) {
+              const h = document.createElement("small");
+              h.textContent = hint;
+              it.appendChild(h);
+            }
+            it.addEventListener("mousedown", (e) => e.preventDefault());
+            it.addEventListener("click", () => pick(String(o[0])));
+            list.appendChild(it);
+          }
+          info.textContent = shown.length > 300 ? `300 von ${shown.length} – weiter eingrenzen` : shown.length ? "" : (q && def.free ? "Enter übernimmt den eigenen Wert" : "Keine Treffer");
+        };
+        input.addEventListener("input", render);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") { closePicker(); return; }
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const q = input.value.trim();
+          const first = list.querySelector(".hab-pitem");
+          const exact = items.find((o) => String(o[0]) === q);
+          if (exact) pick(String(exact[0]));
+          else if (q && def.free) { if (def.multi) pick(q); else { setVal(q); closePicker(); } }
+          else if (first) first.click();
+        });
+        clear.addEventListener("click", () => { setVal(""); if (def.multi) render(); else closePicker(); });
+        Blockly.DropDownDiv.setColour("#ffffff", "#cccccc");
+        Blockly.DropDownDiv.showPositionedByField(this, () => {});
+        list.innerHTML = '<div class="hab-pgroup">lädt …</div>';
+        Promise.resolve().then(() => hooks.options(def.type, field)).then((opts) => {
+          items = Array.isArray(opts) ? opts.map((o) => (Array.isArray(o) ? o : [o, ""])) : [];
+          const cur = selected().filter(Boolean);
+          for (const c of cur) if (!items.some((o) => String(o[0]) === c)) items.unshift([c, "", "Aktuell"]);
+          render();
+        }).catch((e) => { list.innerHTML = ""; info.textContent = "Liste nicht verfügbar: " + (e && e.message ? e.message : e); });
+        setTimeout(() => input.focus(), 0);
+      }
+    }
+    const PICKER = {
+      entity: { free: true }, state: { free: true }, service: { free: true }, area: { free: true }, device: { free: false },
+      floor: { free: true }, time: { free: true }, triggerid: { free: true, multi: true }, devauto: { free: false },
+    };
+
     const TIME_HINTS = () => [
       ...["06:00:00", "07:00:00", "08:00:00", "12:00:00", "18:00:00", "20:00:00", "22:00:00"],
       ...hooks.entities(["input_datetime", "sensor"]).filter(([id]) => id.startsWith("input_datetime.") || /time|zeit|alarm/i.test(id)),
@@ -610,6 +766,11 @@
     }
 
     function makeField(block, f, str) {
+      if (hooks.blockly && PICKER[f.type]) {
+        const multi = PICKER[f.type].multi || (LISTY.has(f.type) && Array.isArray(f.orig));
+        return new FieldPicker(str, { ...PICKER[f.type], multi, type: f.type, domains: f.domains, of: f.of, kind: f.kind,
+          placeholder: f.show === "present" || /^(from|to|attribute|target\.(area_id|device_id))$/.test(f.path) ? "–" : undefined });
+      }
       switch (f.type) {
         case "entity":
           return new FieldSuggest(str, () => hooks.entities(f.domains));
@@ -728,10 +889,15 @@
               return;
             }
           }
-          const str = toFieldString(v, f);
-          const fld = makeField(this, f, str);
+          const str = f.type === "devauto" ? devKey(raw) : toFieldString(v, f);
+          const fld = makeField(this, { ...f, orig: v }, str);
           inp.appendField(fld, name);
           this.fieldMap_.push({ name, path: f.path, orig: v, origStr: str, type: f.type, numeric: f.numeric });
+          if (hooks.blockly && PICKER[f.type]) {
+            if (f.type === "entity" || f.type === "service") fld.setTooltip && fld.setTooltip(str);
+            if (f.type === "service") this.serviceField_ = name;
+            return;
+          }
           if (f.type === "entity") {
             const lbl = new Blockly.FieldLabel(hooks.entityName(str), "ha-entity-name");
             inp.appendField(lbl, "N" + i);
@@ -801,7 +967,7 @@
   // ---------- Werkzeugkasten ----------
   // Leere Vorgaben weglassen: Felder werden trotzdem angezeigt, aber nur geschrieben, wenn man sie ausfüllt.
   // Diese Schlüssel bestimmen die Blockart und bleiben deshalb auch leer erhalten.
-  const KIND_KEYS = new Set(["action", "event", "stop", "scene", "wait_template", "variables"]);
+  const KIND_KEYS = new Set(["action", "event", "stop", "scene", "wait_template", "variables", "device_id"]);
   function stripEmpty(v, top = true) {
     if (Array.isArray(v)) return v.map((x) => stripEmpty(x, true));
     if (!isObj(v)) return v;
@@ -919,6 +1085,7 @@
           tb("trigger", { trigger: "webhook", webhook_id: "", local_only: true }),
           tb("trigger", { trigger: "tag", tag_id: "" }),
           tb("trigger", { trigger: "persistent_notification", notification_id: "" }),
+          ...(hooks.blockly ? [label("Gerät"), tb("trigger", { trigger: "device", device_id: "" })] : []),
         ] },
         { kind: "category", name: "Bedingungen", colour: String(C.condition), contents: [
           tb("condition", { condition: "state", entity_id: "", state: "" }),
@@ -932,8 +1099,12 @@
           tb("condition", { condition: "and", conditions: [] }),
           tb("condition", { condition: "or", conditions: [] }),
           tb("condition", { condition: "not", conditions: [] }),
+          ...(hooks.blockly ? [label("Gerät"), tb("condition", { condition: "device", device_id: "" })] : []),
         ] },
-        { kind: "category", name: "Aktionen", colour: String(C.action), contents: actionBlocks },
+        { kind: "category", name: "Aktionen", colour: String(C.action), contents: [
+          ...actionBlocks,
+          ...(hooks.blockly ? [label("Gerät"), tb("action", { device_id: "" })] : []),
+        ] },
         { kind: "category", name: "Ablauf", colour: String(C.flow), contents: [
           tb("action", { if: [], then: [], else: [] }),
           tb("action", { choose: [{ conditions: [], sequence: [] }], default: [] }),
@@ -948,12 +1119,33 @@
           tb("action", { sequence: [] }),
           tb("action", { stop: "" }),
         ] },
-        { kind: "category", name: "Roh-JSON", colour: C.generic, contents: [
+        ...(hooks.blockly && !hooks.expert ? [] : [{ kind: "category", name: "Roh-JSON", colour: C.generic, contents: [
           label("Für alles ohne eigenen Block – rechts im JSON-Feld bearbeiten"),
           tb("action", {}),
-        ] },
+        ] }]),
+        ...(hooks.blockly ? [allServicesCat()] : []),
       ],
     });
+  }
+
+  // Blockly-Modus: alle Dienste aus HA, nach Bereich (Domain) sortiert.
+  function allServicesCat() {
+    const byDom = new Map();
+    for (const s of hooks.services()) {
+      const id = Array.isArray(s) ? s[0] : s;
+      if (typeof id !== "string" || !id.includes(".")) continue;
+      const d = id.split(".")[0];
+      if (!byDom.has(d)) byDom.set(d, []);
+      byDom.get(d).push(id);
+    }
+    const doms = [...byDom.keys()].sort((a, b) => String(hooks.domainName(a) || a).localeCompare(String(hooks.domainName(b) || b), "de"));
+    return {
+      kind: "category", name: "Alle Dienste", colour: String(C.action),
+      contents: doms.length ? doms.map((d) => ({
+        kind: "category", name: `${hooks.domainName(d) || d} (${byDom.get(d).length})`, colour: String(C.action),
+        contents: byDom.get(d).map((id) => tb("action", { action: id })),
+      })) : [label("Dienste werden geladen …")],
+    };
   }
 
   const NEW_AUTOMATION = () => ({
@@ -1164,6 +1356,10 @@
   function missingInfo(item) {
     if (!isObj(item)) return null;
     const empty = (v) => v === "" || (Array.isArray(v) && v.length === 0);
+    if ((item.trigger === "device" || item.platform === "device" || item.condition === "device" || "device_id" in item) &&
+        !("action" in item) && (empty(item.device_id) || item.device_id === undefined)) return "Bitte noch ein Gerät auswählen";
+    if ((item.trigger === "device" || item.platform === "device" || item.condition === "device" || ("device_id" in item && !("action" in item))) && !item.type)
+      return "Bitte noch auswählen, was das Gerät tun / melden soll";
     if ("entity_id" in item && empty(item.entity_id)) return "Bitte noch eine Entität auswählen";
     if (isObj(item.target) && "entity_id" in item.target && empty(item.target.entity_id) &&
         !item.target.area_id && !item.target.device_id && !item.target.floor_id && !item.target.label_id) return "Bitte noch ein Ziel auswählen";
@@ -1174,7 +1370,7 @@
 
   const NEW_SCRIPT = (alias = "Neues Skript") => ({ alias, description: "", fields: {}, sequence: [], mode: "single" });
 
-  const api = { NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
+  const api = { devKey, NEW_SCRIPT, walkConfig, collectPaths, triggerIds, durationSeconds, lint, references, ROOTS, TEMPLATES, missingInfo, simpleChips, setPath, delPath, isObj, clone, deepEqual, getPath, specFor, nativeEditable, itemToBlockJson, blockToItem, defineBlocks, buildToolbox, hooks, classify, NEW_AUTOMATION };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.HAB = api;
 })(typeof window !== "undefined" ? window : globalThis);

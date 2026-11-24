@@ -30,7 +30,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, PANEL_ICON, PANEL_TITLE, PANEL_URL, STATIC_URL
+from .const import CONF_UI_MODE, DOMAIN, PANEL_ICON, PANEL_TITLE, PANEL_URL, STATIC_URL, UI_MODE_HA, UI_MODES
 
 BASE_DIR = Path(__file__).parent
 WWW_DIR = BASE_DIR / "www"
@@ -116,6 +116,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         data["static_registered"] = True
 
+    ui_mode = entry.options.get(CONF_UI_MODE, UI_MODE_HA)
+    if ui_mode not in UI_MODES:
+        ui_mode = UI_MODE_HA
     await panel_custom.async_register_panel(
         hass,
         frontend_url_path=PANEL_URL,
@@ -123,13 +126,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
         module_url=f"{STATIC_URL}/panel.js?v={version}",
-        config={"static_url": STATIC_URL, "version": version},
+        config={"static_url": STATIC_URL, "version": version, "ui_mode": ui_mode},
         require_admin=True,
     )
 
     # Nach einem Neustart ist der geladene Code aktuell: alte Meldung entfernen.
-    ir.async_delete_issue(hass, DOMAIN, RESTART_ISSUE)
-    loaded_hash = await hass.async_add_executor_job(_code_hash)
+    # Nur beim ersten Laden im Prozess – ein Neuladen (z. B. nach Änderung der
+    # Einstellungen) lädt keinen neuen Python-Code.
+    if "loaded_hash" not in data:
+        ir.async_delete_issue(hass, DOMAIN, RESTART_ISSUE)
+        data["loaded_hash"] = await hass.async_add_executor_job(_code_hash)
+    loaded_hash = data["loaded_hash"]
 
     async def _check_for_new_code(_now=None) -> None:
         current = await hass.async_add_executor_job(_code_hash)
@@ -147,7 +154,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
     entry.async_on_unload(async_track_time_interval(hass, _check_for_new_code, CHECK_INTERVAL))
+    # Geänderte Einstellungen: Panel mit neuer Konfiguration neu anmelden.
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
