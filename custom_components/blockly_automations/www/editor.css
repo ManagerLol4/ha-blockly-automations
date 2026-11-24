@@ -195,3 +195,23 @@ details.yaml summary { cursor: pointer; font-size: 13px; font-weight: 600; margi
 .hab-unknown > .blocklyPath { stroke: #ffd600 !important; stroke-width: 4px !important; stroke-dasharray: 5 3; }
 .lg.unk::before { border-color: #ffd600; border-style: dashed; }
 .fixBtn { display: block; margin-top: 4px; font-size: 12px; padding: 3px 8px; }
+
+/* Vier Arten: Tabs in zwei Reihen */
+.tabs { flex-wrap: wrap; }
+.tab { flex: 1 1 50%; font-size: 13px; padding: 6px 4px; }
+.bpOnly { display: none; }
+body[data-kind="blueprint"] .bpOnly { display: inline-block; }
+.item .use, .item .del { padding: 0 6px; font-size: 12px; }
+/* Auswahl nach Typ */
+.tq { width: 100%; margin-bottom: 8px; }
+.tlist { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; }
+.tgroup { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); padding: 8px 4px 2px; }
+.titem { display: flex; flex-direction: column; align-items: flex-start; text-align: left; border: 0; background: none; padding: 6px 8px; border-radius: 6px; }
+.titem:hover { background: var(--hover); }
+.titem small { color: var(--muted); font-size: 11px; }
+/* Blueprint-Formulare */
+.bpForm { display: flex; flex-direction: column; gap: 8px; }
+.bpForm label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.bpForm textarea { font: 12px/1.4 Consolas, monospace; background: var(--input); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+.bpForm .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.bpEnts { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; max-height: 40vh; overflow: auto; }

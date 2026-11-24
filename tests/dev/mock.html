@@ -19,9 +19,10 @@
     st("script.licht_szene", "off", { friendly_name: "Licht-Szene für einen Raum" }),
     st("binary_sensor.flur_bewegung", "off", { friendly_name: "Flur Bewegung" }),
     st("binary_sensor.bad_fenster", "on", { friendly_name: "Bad Fenster" }),
-    st("light.flur", "off", { friendly_name: "Flur Licht" }),
+    st("light.flur", "on", { friendly_name: "Flur Licht", brightness: 180, color_mode: "brightness" }),
     st("input_boolean.nachtmodus", "off", { friendly_name: "Nachtmodus" }),
     st("sun.sun", "below_horizon", { friendly_name: "Sonne" }),
+    st("scene.abend", "2026-01-01T00:00:00", { id: "1700", friendly_name: "Abend" }),
   ].forEach((s) => (states[s.entity_id] = s));
   const configs = {
     "automation/1001": {
@@ -41,6 +42,7 @@
       triggers: [{ trigger: "state", entity_id: "binary_sensor.bad_fenster", to: "on", for: { minutes: 15 } }],
       conditions: [], actions: [{ action: "persistent_notification.create", data: { title: "Fenster", message: "{{ states('binary_sensor.bad_fenster') }} seit 15 Minuten" } }],
     },
+    "scene/1700": { id: "1700", name: "Abend", entities: { "light.flur": { state: "on", brightness: 120 }, "input_boolean.nachtmodus": "off" } },
     "script/licht_szene": {
       alias: "Licht-Szene für einen Raum", description: "",
       fields: { raum: { name: "Raum", selector: { area: {} } } },
@@ -61,6 +63,11 @@
     }],
   };
   const layouts = {};
+  const saved = [];
+  const blueprints = { automation: { "homeassistant/motion_light.yaml": {
+    metadata: { name: "Bewegungslicht", domain: "automation", input: { motion_entity: { name: "Bewegungsmelder", selector: { entity: { domain: "binary_sensor" } } }, light_target: { name: "Licht", selector: { target: {} } } } },
+    config: { triggers: [{ trigger: "state", entity_id: { __input: "motion_entity" }, to: "on" }], actions: [{ action: "light.turn_on", target: { __input: "light_target" } }], mode: "restart" },
+  } } };
   const svc = (fields = {}, target = { entity: {} }) => ({ fields, target });
   const hass = {
     states, user: { is_admin: true }, themes: { darkMode: false },
@@ -90,7 +97,14 @@
       switch (msg.type) {
         case "config/category_registry/list": return msg.scope === "automation" ? [{ category_id: "c1", name: "Licht" }] : [];
         case "config/entity_registry/get_entries": return { "automation.licht_flur": { categories: { automation: "c1" } }, "script.licht_szene": { unique_id: "licht_szene", categories: {} } };
-        case "blueprint/list": return {};
+        case "blueprint/list": return Object.fromEntries(Object.entries(blueprints[msg.domain] || {}).map(([p, b]) => [p, { metadata: b.metadata }]));
+        case "blueprint/substitute": {
+          const b = (blueprints[msg.domain] || {})[msg.path];
+          const sub = (v) => (Array.isArray(v) ? v.map(sub) : v && typeof v === "object" ? ("__input" in v ? msg.input[v.__input] : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)]))) : v);
+          return { substituted_config: sub(b.config) };
+        }
+        case "blueprint/save": saved.push(msg); (blueprints[msg.domain] = blueprints[msg.domain] || {})[msg.path] = { metadata: { name: (/name: (.*)/.exec(msg.yaml) || [0, msg.path])[1], domain: msg.domain, input: {} }, config: {} }; return null;
+        case "blueprint/delete": delete blueprints[msg.domain][msg.path]; return null;
         case "device_automation/trigger/list": return msg.device_id === "dev1" ? [
           { platform: "device", device_id: "dev1", domain: "zha", type: "remote_button_short_press", subtype: "turn_on", metadata: {} },
           { platform: "device", device_id: "dev1", domain: "zha", type: "remote_button_long_press", subtype: "turn_off", metadata: {} },
@@ -111,7 +125,7 @@
     callService: async () => {},
     connection: { subscribeMessage: (cb, msg) => { setTimeout(() => cb({ result: "(Test) " + msg.template.slice(0, 40) }), 50); return Promise.resolve(() => {}); } },
   };
-  window.__mock = { hass, configs, layouts };
+  window.__mock = { hass, configs, layouts, blueprints, saved };
   // ?ui=blockly zeigt den Blockly-Modus (sonst HA-Auswahlfenster).
   const ui = new URLSearchParams(location.search).get("ui") || "ha";
   window.__haBlocklyConfig = { ui_mode: ui };

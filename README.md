@@ -89,6 +89,31 @@ Aufbau wie der Blockly-Skripteditor in ioBroker: links die Liste, rechts die Bau
 8. **Einklappen** (Rechtsklick): bleibt gespeichert, ohne die Automation zu verändern
    (eigener Speicher unter `.storage/blockly_automations.layout`).
 
+### Auswahl nach Typ
+
+- **„＋ Auslöser/Bedingung/Aktion hinzufügen“** öffnet im Blockly-Modus eine Auswahl **nach Typ** – gruppiert
+  (z. B. *Entität*, *Zeit & Ort*, *Gerät*, *Logik*, *Ablauf*, *Dienste je Integration*) und mit Suche.
+  Im HA-Modus gibt es dafür im Werkzeugkasten „… nach Typ wählen“.
+- **Rechtsklick → 🔁 Typ ändern …**: z. B. *Zustand ändert sich* → *Zahlenwert*; Entität, Ziel, Name und ID bleiben.
+
+### 🎬 Szenen
+
+Eigener Tab: Szenen öffnen, ändern, neu anlegen (*＋ Neu → Szene*), mit ▶ aktivieren. Jede Entität ist ein
+Baustein mit Zustand und Attributen (z. B. Helligkeit). **📸 Zustand von jetzt übernehmen** – für eine
+Entität oder alle – speichert den aktuellen Zustand in die Szene. Gespeichert wird über `config/scene/config/<id>`.
+
+### 🧩 Blueprints
+
+Eigener Tab mit allen Blueprints (für Automationen und Skripte):
+- **Bearbeiten in Blockly:** Home Assistant setzt für jede Eingabe einen Platzhalter ein; in Auswahllisten
+  erscheinen die Eingaben als „🧩 Eingabe: …“. Beim Speichern werden daraus wieder `!input`-Einträge.
+  Hinweis: Die YAML-Datei wird dabei neu geschrieben – Kommentare und Formatierung gehen verloren.
+- **🧩 Eigenschaften:** Name, Beschreibung, Autor und Eingaben (mit Auswahl-Art) bearbeiten.
+- **＋ Neu → Blueprint (leer)** oder **Blueprint aus dieser Automation / diesem Skript**: gewählte Entitäten
+  werden zu Eingaben; gespeichert unter `blueprints/<art>/blockly/<name>.yaml`.
+- **＋** am Blueprint legt eine neue Automation bzw. ein Skript daraus an, **🗑** löscht ihn
+  (HA verweigert das, solange er benutzt wird).
+
 ### Skripte als Funktionen
 
 Oben in der Liste zwischen **🤖 Automationen** und **📜 Skripte** umschalten. Skripte werden genauso

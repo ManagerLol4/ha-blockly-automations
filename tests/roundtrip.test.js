@@ -565,6 +565,70 @@ const dry = (async () => {
   n++;
 })();
 
+// 26) Szenen: verlustfrei, Entität/Zustand ändern, Entität entfernen.
+ok("szenen", () => {
+  const cfg = { id: "1700", name: "Abend", icon: "mdi:sofa", entities: { "light.a": { state: "on", brightness: 120 }, "switch.b": "off", "cover.c": { state: "open", current_position: 40 } }, metadata: { "light.a": { entity_only: true } } };
+  for (const blockly of [false, true]) {
+    HAB.hooks.blockly = blockly;
+    const r = toBlocks(cfg, "scene");
+    assert.strictEqual(r.type, "ha_scene");
+    assert.deepStrictEqual(HAB.blockToItem(r), cfg, `Szene verlustfrei (blockly=${blockly})`);
+    const e1 = child(r, "L0");
+    e1.setFieldValue("light.wohnzimmer", field(e1, "__e"));
+    e1.setFieldValue("180", field(e1, "__v.brightness"));
+    const sw = e1.getNextBlock();
+    sw.setFieldValue("on", field(sw, "__v"));
+    const out = HAB.blockToItem(r);
+    assert.deepStrictEqual(Object.keys(out.entities), ["light.wohnzimmer", "switch.b", "cover.c"]);
+    assert.deepStrictEqual(out.entities["light.wohnzimmer"], { state: "on", brightness: 180 });
+    assert.strictEqual(out.entities["switch.b"], "on");
+    sw.getNextBlock().dispose(true);
+    assert.deepStrictEqual(Object.keys(HAB.blockToItem(r).entities), ["light.wohnzimmer", "switch.b"]);
+  }
+  HAB.hooks.blockly = false;
+  assert.ok(HAB.missingInfo({ __e: "", __v: "on" }));
+  assert.deepStrictEqual(HAB.references(cfg, "scene").map((x) => x.entity), ["light.a", "switch.b", "cover.c"]);
+  for (const item of HAB.buildToolbox("scene").contents[0].contents.filter((x) => x.kind === "block"))
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(item.extraState.raw, "sceneent")), item.extraState.raw);
+});
+
+// 27) Auswahl nach Typ: jeder Typ ist als Baustein verlustfrei; „Typ ändern“ übernimmt Passendes.
+ok("nach-typ", () => {
+  for (const blockly of [false, true]) {
+    HAB.hooks.blockly = blockly;
+    for (const kind of ["trigger", "condition", "action"]) {
+      const cat = HAB.typeCatalog(kind, [["light.turn_on", "Licht an"], ["notify.mobile", ""]], (d) => d);
+      assert.ok(cat.length > 2);
+      for (const g of cat) for (const x of g.items) {
+        const raw = HAB.stripEmpty(HAB.clone(x.item));
+        const k = HAB.classify(kind, raw);
+        assert.deepStrictEqual(HAB.blockToItem(toBlocks(raw, k)), raw, `${kind}: ${x.label} (blockly=${blockly})`);
+      }
+    }
+  }
+  HAB.hooks.blockly = false;
+  const c = HAB.convertType({ trigger: "state", entity_id: ["a.b", "c.d"], to: "on", id: "x", alias: "Tür" }, { trigger: "numeric_state", entity_id: "", above: 0 });
+  assert.deepStrictEqual(c, { trigger: "numeric_state", above: 0, alias: "Tür", id: "x", entity_id: ["a.b", "c.d"] });
+  assert.deepStrictEqual(HAB.convertType({ action: "light.turn_on", target: { area_id: "flur" } }, { action: "light.turn_off" }), { action: "light.turn_off", target: { area_id: "flur" } });
+  assert.deepStrictEqual(HAB.convertType({ condition: "state", entity_id: "a.b", state: "on" }, { condition: "time", after: "08:00:00" }), { condition: "time", after: "08:00:00" });
+});
+
+// 28) Blueprints: Platzhalter werden zu !input, Rundlauf mit Platzhaltern verlustfrei.
+ok("blueprint-yaml", () => {
+  const ph = HAB.inputPlaceholder;
+  const cfg = { triggers: [{ trigger: "state", entity_id: ph("sensor"), to: "on" }], actions: [{ action: "light.turn_on", target: ph("licht") }, { delay: ph("warte") }], mode: "restart" };
+  for (const blockly of [false, true]) {
+    HAB.hooks.blockly = blockly;
+    assert.deepStrictEqual(HAB.blockToItem(toBlocks(cfg)), cfg);
+  }
+  HAB.hooks.blockly = false;
+  const y = HAB.toYaml({ blueprint: { name: "B", domain: "automation", input: { sensor: { name: "S" } } }, ...cfg });
+  assert.match(y, /entity_id: !input sensor/);
+  assert.match(y, /target: !input licht/);
+  assert.match(y, /delay: !input warte/);
+  assert.ok(!/@@input/.test(y));
+});
+
 // 13) Versionsnummern stimmen überein (manifest, package.json, version.json).
 ok("version", () => {
   const read = (...p) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", ...p), "utf8")).version;
